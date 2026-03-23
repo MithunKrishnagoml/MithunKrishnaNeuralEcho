@@ -1,0 +1,42 @@
+services:
+  - type: web
+    name: neuralecho-backend
+    env: node
+    region: oregon
+    plan: free
+    rootDir: backend
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_PHONE_NUMBER
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: PUBLIC_URL
+        sync: false
+
+  - type: web
+    name: neuralecho-frontend
+    env: node
+    region: oregon
+    plan: free
+    rootDir: frontend
+    buildCommand: npm install; npm run build
+    startCommand: npm run preview
+    envVars:
+      - key: VITE_BACKEND_URL
+        sync: false
+      - key: VITE_WS_URL
+        sync: false
+      - key: VITE_OPENAI_API_KEY
+        sync: false
+      - key: VITE_ELEVENLABS_API_KEY
+        sync: false
+      - key: VITE_SARVAM_API_KEY
+        sync: false
