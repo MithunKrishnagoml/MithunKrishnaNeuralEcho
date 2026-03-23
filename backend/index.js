@@ -7,11 +7,12 @@ import { WebSocketServer } from 'ws';
 import { createServer } from 'http';
 import WebSocket from 'ws';
 
-// Load environment variables from parent directory
+// Load environment variables from parent directory or current directory
 // Deployment trigger: Fixed syntax error - REDEPLOY NOW
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 dotenv.config({ path: join(__dirname, '../.env') });
+dotenv.config({ path: join(__dirname, '.env') }); // Also check current directory
 
 const app = express();
 const server = createServer(app);
