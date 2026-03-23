@@ -1,0 +1,105 @@
+/* GoML Background Design */
+.goml-bg {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background: linear-gradient(135deg, hsl(0, 0%, 98%) 0%, hsl(0, 0%, 96%) 100%);
+  overflow: hidden;
+}
+
+.goml-bg::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: 
+    radial-gradient(circle at 20% 50%, rgba(24, 144, 255, 0.03) 0%, transparent 50%),
+    radial-gradient(circle at 80% 80%, rgba(24, 144, 255, 0.02) 0%, transparent 50%),
+    radial-gradient(circle at 40% 20%, rgba(24, 144, 255, 0.02) 0%, transparent 50%);
+  pointer-events: none;
+}
+
+.goml-bg::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: 
+    linear-gradient(90deg, transparent 0%, rgba(24, 144, 255, 0.01) 50%, transparent 100%),
+    linear-gradient(0deg, transparent 0%, rgba(24, 144, 255, 0.01) 50%, transparent 100%);
+  background-size: 100px 100px;
+  pointer-events: none;
+}
+
+/* GoML Logo Pattern */
+.goml-pattern {
+  position: absolute;
+  opacity: 0.03;
+  font-size: 120px;
+  font-weight: bold;
+  color: hsl(24, 95%, 53%);
+  letter-spacing: 2em;
+  pointer-events: none;
+  user-select: none;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.goml-pattern-1 {
+  top: 5%;
+  left: -10%;
+  transform: rotate(-15deg);
+}
+
+.goml-pattern-2 {
+  top: 50%;
+  right: -5%;
+  transform: rotate(25deg);
+}
+
+.goml-pattern-3 {
+  bottom: 10%;
+  left: 5%;
+  transform: rotate(-10deg);
+}
+
+#root {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 2rem;
+  text-align: center;
+}
+
+.logo {
+  height: 6em;
+  padding: 1.5em;
+  will-change: filter;
+  transition: filter 300ms;
+}
+.logo:hover {
+  filter: drop-shadow(0 0 2em hsl(24, 95%, 53%));
+}
+.logo.react:hover {
+  filter: drop-shadow(0 0 2em hsl(24, 95%, 53%));
+}
+
+@keyframes logo-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  a:nth-of-type(2) .logo {
+    animation: logo-spin infinite 20s linear;
+  }
+}
+
+.card {
+  padding: 2em;
+}
+
+.read-the-docs {
+  color: hsl(220, 5%, 55%);
+}

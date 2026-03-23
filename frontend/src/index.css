@@ -1,0 +1,206 @@
+@import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700&display=swap");
+@import "flag-icons/css/flag-icons.min.css";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 220 10% 8%;
+    --foreground: 0 0% 95%;
+
+    --card: 220 10% 12%;
+    --card-foreground: 0 0% 95%;
+
+    --popover: 220 10% 14%;
+    --popover-foreground: 0 0% 95%;
+
+    --primary: 24 95% 53%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 220 8% 18%;
+    --secondary-foreground: 0 0% 85%;
+
+    --muted: 220 8% 16%;
+    --muted-foreground: 220 5% 55%;
+
+    --accent: 24 95% 53%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 220 8% 20%;
+    --input: 220 8% 22%;
+    --ring: 24 95% 53%;
+
+    --radius: 0.75rem;
+
+    --caption: 0 0% 100%;
+    --caption-muted: 220 5% 65%;
+    --surface-elevated: 220 10% 15%;
+    --live: 24 95% 53%;
+    --live-glow: 24 100% 60%;
+    --success: 142 72% 45%;
+    --listening: 24 95% 53%;
+
+    --sidebar-background: 220 10% 10%;
+    --sidebar-foreground: 0 0% 85%;
+    --sidebar-primary: 24 95% 53%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 220 8% 18%;
+    --sidebar-accent-foreground: 0 0% 85%;
+    --sidebar-border: 220 8% 20%;
+    --sidebar-ring: 24 95% 53%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    font-family: "Inter", system-ui, sans-serif;
+  }
+}
+
+@layer utilities {
+  .font-mono-display {
+    font-family: "JetBrains Mono", monospace;
+  }
+}
+
+@keyframes pulse-ring {
+  0% {
+    transform: scale(1);
+    opacity: 0.6;
+  }
+  100% {
+    transform: scale(1.8);
+    opacity: 0;
+  }
+}
+
+@keyframes mic-breathe {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.05);
+  }
+}
+
+@keyframes waveform {
+  0%,
+  100% {
+    height: 12px;
+  }
+  50% {
+    height: 28px;
+  }
+}
+
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-pulse-ring {
+  animation: pulse-ring 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+.animate-mic-breathe {
+  animation: mic-breathe 2s ease-in-out infinite;
+}
+
+.animate-fade-up {
+  animation: fade-up 0.3s ease-out forwards;
+}
+
+@keyframes waveform-bar {
+  0%,
+  100% {
+    transform: scaleY(1);
+  }
+  50% {
+    transform: scaleY(0.35);
+  }
+}
+
+.animate-waveform-bar {
+  animation: waveform-bar 0.8s ease-in-out infinite;
+  transform-origin: center;
+}
+@layer base {
+  #lovable-badge {
+    display: none !important;
+  }
+}
+/* Press-to-Talk Animations */
+@keyframes press-pulse {
+  0%, 100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 hsl(var(--primary) / 0.4);
+  }
+  50% {
+    transform: scale(1.02);
+    box-shadow: 0 0 0 8px hsl(var(--primary) / 0);
+  }
+}
+
+@keyframes mic-glow {
+  0%, 100% {
+    box-shadow: 0 0 20px hsl(var(--primary) / 0.3);
+  }
+  50% {
+    box-shadow: 0 0 30px hsl(var(--primary) / 0.6);
+  }
+}
+
+@keyframes live-indicator {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.6;
+    transform: scale(1.1);
+  }
+}
+
+.press-to-talk-active {
+  animation: press-pulse 1.5s ease-in-out infinite;
+}
+
+.mic-recording {
+  animation: mic-glow 2s ease-in-out infinite;
+}
+
+.live-indicator {
+  animation: live-indicator 1s ease-in-out infinite;
+}
+
+/* Prevent text selection on press-to-talk button */
+.press-to-talk-button {
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Spacebar key visual */
+kbd {
+  font-family: inherit;
+  font-size: inherit;
+}
