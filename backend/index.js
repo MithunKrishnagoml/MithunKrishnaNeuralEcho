@@ -399,26 +399,55 @@ const STREAMING_MESSAGE_TYPES = new Set([
   'TRANSLATION_DELTA',
   'AUDIO_CHUNK',
   'VOICE_ACTIVITY_STARTED',
-  'VOICE_ACTIVITY_STOPPED'
+  'VOICE_ACTIVITY_STOPPED',
+  'RELAY_AUDIO_CHUNK',
+  'RELAY_AUDIO_END'
 ]);
 
 function relayStreamingMessage(data, senderWs) {
   const connection = activeConnections.get(senderWs);
   if (!connection) return;
 
-  const { sessionId } = connection;
+  const { sessionId, userId } = connection;
   const translationSession = translationSessions.get(sessionId);
   if (!translationSession) return;
 
-  const payload = {
-    ...data,
-    sessionId: data.sessionId || sessionId,
-    timestamp: data.timestamp || Date.now(),
-  };
+  // Transform RELAY_AUDIO_CHUNK to AUDIO_CHUNK for receiving client
+  let payload = { ...data };
+  if (data.type === 'RELAY_AUDIO_CHUNK') {
+    payload = {
+      type: 'AUDIO_CHUNK',
+      participantId: data.fromParticipant || userId,
+      pcmData: data.chunk,
+      responseId: data.responseId,
+      sessionId: data.sessionId || sessionId,
+      timestamp: data.timestamp || Date.now(),
+    };
+    console.log(`🔄 [RELAY] Converting RELAY_AUDIO_CHUNK to AUDIO_CHUNK, chunk size: ${data.chunk?.length || 0}`);
+  } else if (data.type === 'RELAY_AUDIO_END') {
+    payload = {
+      type: 'AUDIO_STREAM_END',
+      participantId: data.fromParticipant || userId,
+      responseId: data.responseId,
+      sessionId: data.sessionId || sessionId,
+      timestamp: data.timestamp || Date.now(),
+    };
+    console.log(`🔄 [RELAY] Converting RELAY_AUDIO_END to AUDIO_STREAM_END`);
+  } else {
+    payload = {
+      ...data,
+      participantId: data.participantId || userId,
+      sessionId: data.sessionId || sessionId,
+      timestamp: data.timestamp || Date.now(),
+    };
+  }
 
   for (const participant of translationSession.participants.values()) {
     if (participant.socket !== senderWs && participant.socket?.readyState === WebSocket.OPEN) {
       participant.socket.send(JSON.stringify(payload));
+      if (payload.type === 'AUDIO_CHUNK') {
+        console.log(`✅ [RELAY] Sent AUDIO_CHUNK to other participant`);
+      }
     }
   }
 }
