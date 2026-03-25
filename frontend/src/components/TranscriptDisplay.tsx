@@ -48,9 +48,19 @@ export function TranscriptDisplay({
   const getDisplayText = (message: TranscriptMessage) => {
     // ENHANCED BILINGUAL DISPLAY RULES:
     // For own messages: show both original AND translation
-    // For other's messages: show translation in your language
+    // For other's messages: show text in YOUR language (translated if needed)
     const isOwnMessage = message.speakerId === currentParticipant.id;
-    const shouldShowOriginal = currentParticipant.language === message.sourceLanguage;
+    
+    console.log('🔍 [TranscriptDisplay] getDisplayText:', {
+      messageId: message.messageId,
+      isOwnMessage,
+      currentParticipantId: currentParticipant.id,
+      currentParticipantLanguage: currentParticipant.language,
+      messageSourceLanguage: message.sourceLanguage,
+      messageTargetLanguage: message.targetLanguage,
+      originalTranscript: message.originalTranscript?.substring(0, 50),
+      translatedTranscript: message.translatedTranscript?.substring(0, 50)
+    });
     
     if (isOwnMessage) {
       // For own messages, return both texts
@@ -60,8 +70,18 @@ export function TranscriptDisplay({
         showBoth: true
       };
     } else {
-      // For other's messages, show translation in your language
-      const text = shouldShowOriginal ? message.originalTranscript : message.translatedTranscript;
+      // For other's messages, show text in YOUR language
+      // If the message was originally in your language, show original
+      // Otherwise, show the translation (which should be in your language)
+      const isInMyLanguage = currentParticipant.language === message.sourceLanguage;
+      const text = isInMyLanguage ? message.originalTranscript : message.translatedTranscript;
+      
+      console.log('🔍 [TranscriptDisplay] Other message display:', {
+        isInMyLanguage,
+        willShow: isInMyLanguage ? 'original' : 'translation',
+        text: text?.substring(0, 50)
+      });
+      
       return {
         primary: text,
         secondary: null,

@@ -524,10 +524,24 @@ export function ChatroomInterface({ roomId, participant, onLeaveRoom }: Chatroom
 
     messages.forEach(msg => {
       let displayText = '';
+      // Show text in participant's language
+      // If original is in their language, show original; otherwise show translation
+      console.log('🔍 [ChatroomInterface] Processing message for display:', {
+        messageId: msg.id,
+        participantLanguage: participant.language,
+        originalLanguage: msg.originalLanguage,
+        targetLanguage: msg.targetLanguage,
+        originalText: msg.originalText?.substring(0, 30),
+        translatedText: msg.translatedText?.substring(0, 30)
+      });
+      
       if (isSameLanguage(msg.originalLanguage, participant.language)) {
         displayText = msg.originalText;
-      } else if (isSameLanguage(msg.targetLanguage, participant.language)) {
+        console.log('🔍 [ChatroomInterface] Showing ORIGINAL (matches participant language)');
+      } else {
+        // The translation should be in the participant's language (targetLanguage)
         displayText = msg.translatedText;
+        console.log('🔍 [ChatroomInterface] Showing TRANSLATION (different from participant language)');
       }
       const hasNonLatinScript = !!displayText && /[\u0600-\u06FF\u0750-\u077F\u0590-\u05FF\u0900-\u097F\u4E00-\u9FFF\u3040-\u309F\u30A0-\u30FF]/.test(displayText);
 
@@ -538,6 +552,16 @@ export function ChatroomInterface({ roomId, participant, onLeaveRoom }: Chatroom
           isOwnMessage: msg.participantId === participant.id,
           displayText,
           source: 'server',
+        });
+        console.log('✅ [ChatroomInterface] Added message to display:', {
+          id: msg.id,
+          displayText: displayText.substring(0, 30)
+        });
+      } else {
+        console.log('⚠️ [ChatroomInterface] Skipped message (empty or non-Latin):', {
+          id: msg.id,
+          hasText: !!displayText,
+          hasNonLatinScript
         });
       }
     });
