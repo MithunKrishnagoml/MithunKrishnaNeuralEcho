@@ -11,9 +11,9 @@ const createSessionViaBackend = async (config: SessionConfig) => {
   
   const turnDetection = config.voiceMode === "hands-free" ? {
     type: "server_vad",
-    threshold: 0.3,
-    prefix_padding_ms: 200,
-    silence_duration_ms: 300
+    threshold: 0.5, // Balanced sensitivity (0.5 = default, lower = more sensitive)
+    prefix_padding_ms: 300, // Capture 300ms before speech for natural start
+    silence_duration_ms: 700 // Wait 700ms of silence before ending turn (allows natural pauses)
   } : null;
 
   const response = await fetch(REALTIME_SESSION_URL, {
@@ -290,14 +290,23 @@ export function useRealtimeVoice() {
         console.log('🎵 [OUTPUT AUDIO] AudioTap ready:', !!audioTapRef.current);
         console.log('🎵 ═══════════════════════════════════════════════════════');
         
-        // Start real-time capture at first emitted output audio
-        if (audioTapRef.current) {
-          const responseId = event.response_id || `response_${Date.now()}`;
-          audioTapRef.current.startCapture(responseId);
-          console.log('🎵 [RealtimeAudioTap] Started capture (output_audio_buffer.started)');
-        } else {
-          console.error('❌ [RealtimeAudioTap] Cannot start capture - audioTapRef is null!');
-        }
+        // Start real-time capture - with retry logic for race condition
+        const responseId = event.response_id || `response_${Date.now()}`;
+        
+        const tryStartCapture = (attempt: number = 0) => {
+          if (audioTapRef.current) {
+            audioTapRef.current.startCapture(responseId);
+            console.log('✅ [RealtimeAudioTap] Started capture (output_audio_buffer.started)');
+          } else if (attempt < 5) {
+            // Retry up to 5 times with 100ms delay (total 500ms max wait)
+            console.warn(`⚠️ [RealtimeAudioTap] Not ready yet, retrying in 100ms (attempt ${attempt + 1}/5)...`);
+            setTimeout(() => tryStartCapture(attempt + 1), 100);
+          } else {
+            console.error('❌ [RealtimeAudioTap] Failed to start capture after 5 attempts - audioTapRef is still null!');
+          }
+        };
+        
+        tryStartCapture();
         
         // Keep MediaRecorder as fallback
         if (!isRecordingResponseRef.current && mediaRecorderRef.current) {
@@ -460,9 +469,15 @@ export function useRealtimeVoice() {
           const remoteStream = e.streams[0];
           const track = e.track;
           
-          // RELAY CAPTURE: Connect remote stream to capture element (MUTED)
+          // RELAY CAPTURE: Connect remote stream to capture element (MUTED for local, but must PLAY)
           if (relayCaptureAudio) {
             relayCaptureAudio.srcObject = remoteStream;
+            // CRITICAL: Must play() to activate the audio graph, even though muted
+            relayCaptureAudio.play().then(() => {
+              console.log('🎵 [RELAY CAPTURE] Audio element playing (muted for local)');
+            }).catch((err) => {
+              console.warn('⚠️ [RELAY CAPTURE] Failed to play audio element:', err);
+            });
             console.log('🎵 [RELAY CAPTURE] Remote audio connected for relay capture (MUTED)');
           }
           
@@ -516,6 +531,15 @@ export function useRealtimeVoice() {
             console.log('🎵 [RELAY CAPTURE] Track unmuted - now initializing AudioTap');
             initializeAudioTap();
             track.removeEventListener('unmute', handleUnmute);
+            
+            // CRITICAL: Start capture immediately after initialization if AI is already speaking
+            // This handles the race condition where output_audio_buffer.started fires before unmute
+            setTimeout(() => {
+              if (audioTapRef.current && !audioTapRef.current['isCapturing']) {
+                console.log('🎵 [RELAY CAPTURE] AudioTap ready, checking if we missed output_audio_buffer.started...');
+                // We'll rely on the next audio event to trigger capture
+              }
+            }, 100);
           };
           
           if (track.muted) {

@@ -46,14 +46,26 @@ export class RealtimeAudioTap {
       // Create worklet node for PCM extraction
       this.workletNode = new AudioWorkletNode(this.audioContext, 'audio-tap-processor');
 
-      // Connect source to worklet (worklet doesn't connect to destination - no playback)
+      // Connect source to worklet
       source.connect(this.workletNode);
       
       // CRITICAL: Connect worklet to destination to ensure audio graph processes
       // Even though we don't want playback, the graph needs to be connected for processing
-      this.workletNode.connect(this.audioContext.destination);
+      // Set destination volume to 0 to prevent double playback
+      const gainNode = this.audioContext.createGain();
+      gainNode.gain.value = 0; // Mute the tap output
+      this.workletNode.connect(gainNode);
+      gainNode.connect(this.audioContext.destination);
       
-      console.log('🎤 [RealtimeAudioTap] Audio graph connected: source → worklet → destination');
+      console.log('🎤 [RealtimeAudioTap] Audio graph connected: source → worklet → gain(0) → destination');
+      console.log('🎤 [RealtimeAudioTap] AudioContext state:', this.audioContext.state);
+      console.log('🎤 [RealtimeAudioTap] AudioContext sampleRate:', this.audioContext.sampleRate);
+      
+      // Resume AudioContext if suspended (browser autoplay policy)
+      if (this.audioContext.state === 'suspended') {
+        await this.audioContext.resume();
+        console.log('🎤 [RealtimeAudioTap] AudioContext resumed from suspended state');
+      }
 
       // Listen for PCM chunks from worklet
       this.workletNode.port.onmessage = (event) => {
