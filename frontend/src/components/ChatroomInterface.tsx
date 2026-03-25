@@ -686,9 +686,19 @@ export function ChatroomInterface({ roomId, participant, onLeaveRoom }: Chatroom
       return;
     }
     
-    // Toggle mute state
-    await toggleMute();
-  }, [isMuted, isVoiceReady, sessionState, isConnected, otherParticipant, toggleMute]);
+    // In push-to-talk mode: press to start, release to stop and process
+    if (!isMuted) {
+      // Currently speaking - stop and process
+      console.log('🛑 [MIC TOGGLE] Stopping listening and processing audio');
+      stopRoomListening();
+      setIsMuted(true);
+    } else {
+      // Currently muted - start listening
+      console.log('🎤 [MIC TOGGLE] Starting listening');
+      startRoomListening();
+      setIsMuted(false);
+    }
+  }, [isMuted, isVoiceReady, sessionState, isConnected, otherParticipant, startRoomListening, stopRoomListening]);
 
   const copyShareableLink = useCallback(() => {
     const baseUrl = import.meta.env.VITE_APP_URL || window.location.origin;
