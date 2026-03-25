@@ -64,6 +64,7 @@ export interface RealtimeStreamingCallbacks {
   onPartialTranscript?: (delta: string, itemId: string) => void;
   onTranslationDelta?: (delta: string, responseId: string) => void;
   onAudioChunk?: (audioData: string, responseId: string) => void;
+  onAIAudioChunk?: (audioData: string, sequenceNumber: number) => void;
   onSilenceDetected?: () => void;
   onError?: (error: Error) => void;
 }
@@ -142,6 +143,7 @@ export function useRealtimeVoice() {
     onPartialTranscript?: (delta: string, itemId: string) => void;
     onTranslationDelta?: (delta: string, responseId: string) => void;
     onAudioChunk?: (audioData: string, responseId: string) => void;
+    onAIAudioChunk?: (audioData: string, sequenceNumber: number) => void;
   } | null>(null);
 
   const handleDataChannelMessage = useCallback((evt: MessageEvent) => {
@@ -459,10 +461,16 @@ export function useRealtimeVoice() {
             const audioTrack = remoteStream.getAudioTracks()[0];
             if (audioTrack) {
               audioTapRef.current = new RealtimeAudioTap(
-                // onAudioChunk callback
+                // onAudioChunk callback - send to room via WebSocket
                 (pcmData: string, responseId: string, sequenceNumber: number) => {
+                  // Send to local audio player
                   if (callbacksRef.current?.onAudioChunk) {
                     callbacksRef.current.onAudioChunk(pcmData, responseId);
+                  }
+                  
+                  // RELAY TO BACKEND: Send AI audio chunk to all participants
+                  if (callbacksRef.current?.onAIAudioChunk) {
+                    callbacksRef.current.onAIAudioChunk(pcmData, sequenceNumber);
                   }
                 },
                 // onStreamEnd callback
@@ -472,7 +480,7 @@ export function useRealtimeVoice() {
               );
               
               audioTapRef.current.initialize(audioTrack);
-              console.log('🎤 [RealtimeAudioTap] Initialized for real-time streaming');
+              console.log('🎤 [RealtimeAudioTap] Initialized for real-time streaming and relay');
             }
           } catch (error) {
             console.warn('⚠️ [RealtimeAudioTap] Failed to set up real-time audio tap:', error);

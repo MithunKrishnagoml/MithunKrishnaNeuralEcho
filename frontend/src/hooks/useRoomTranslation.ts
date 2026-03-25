@@ -127,6 +127,7 @@ export function useRoomTranslation({
 
   useEffect(() => {
     const otherLanguage = participant.language === 'en-US' ? 'fr-CA' : 'en-US';
+    let aiAudioSeq = 0;
 
     setRealtimeStreamingCallbacks({
       onVoiceActivityStarted: () => {
@@ -143,6 +144,16 @@ export function useRoomTranslation({
       },
       onAudioChunk: (audioData: string, responseId: string) => {
         sendAudioChunk(audioData, responseId);
+      },
+      onAIAudioChunk: (audioData: string, sequenceNumber: number) => {
+        // Send AI audio chunk to backend for relay to all participants
+        sendEvent({
+          type: 'AI_AUDIO_CHUNK',
+          participantId: participant.id,
+          audioData,
+          seq: aiAudioSeq++,
+          timestamp: Date.now()
+        });
       },
     });
 

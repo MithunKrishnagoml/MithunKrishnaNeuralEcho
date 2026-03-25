@@ -223,6 +223,13 @@ export function ChatroomInterface({ roomId, participant, onLeaveRoom }: Chatroom
         addTranslationDelta(event.delta, event.responseId, event.targetLanguage);
       }
 
+      // Handle AI audio chunks (from OpenAI, relayed by backend)
+      if (event.type === 'AI_AUDIO_CHUNK') {
+        console.log(`🤖 [AI_AUDIO_CHUNK] Received seq ${event.seq} from ${event.fromParticipant}`);
+        // Play AI audio for ALL participants (both users hear the AI voice)
+        playIncomingAudioChunk(event.audioData, `ai_${event.fromParticipant}_${event.seq}`);
+      }
+
       if (event.type === 'AUDIO_CHUNK') {
         if (!participant.id) {
           console.warn('⚠️ [AUDIO_CHUNK] participant.id is not set, allowing audio through');

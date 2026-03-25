@@ -823,6 +823,42 @@ wss.on('connection', (ws, req) => {
         }
       }
 
+      // Handle AI audio chunks from OpenAI (relay to all participants)
+      if (data.type === 'AI_AUDIO_CHUNK') {
+        const { participantId, audioData, seq } = data;
+        console.log(`🤖 [AI_AUDIO_CHUNK] From ${participantId}, seq: ${seq}, size: ${audioData?.length || 0}`);
+        
+        const connection = activeConnections.get(ws);
+        if (!connection) return;
+
+        const { sessionId } = connection;
+        const translationSession = translationSessions.get(sessionId);
+        if (!translationSession) return;
+
+        // Broadcast AI audio chunk to ALL participants (including sender)
+        // Both users need to hear the AI voice
+        const chunkMessage = {
+          type: 'AI_AUDIO_CHUNK',
+          sessionId: sessionId,
+          fromParticipant: participantId,
+          audioData: audioData,
+          seq: seq,
+          timestamp: Date.now()
+        };
+
+        let sentCount = 0;
+        for (const [userId, participant] of translationSession.participants.entries()) {
+          if (participant.socket && participant.socket.readyState === WebSocket.OPEN) {
+            participant.socket.send(JSON.stringify(chunkMessage));
+            sentCount++;
+          }
+        }
+        
+        if (sentCount > 0) {
+          console.log(`🤖 [AI_AUDIO_CHUNK] Broadcast to ${sentCount} participant(s)`);
+        }
+      }
+
       // Handle translated audio from frontend
       if (data.type === 'TRANSLATED_AUDIO') {
         const { participantId, audioData, originalText, translatedText, messageId } = data;
