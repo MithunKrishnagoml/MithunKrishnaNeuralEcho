@@ -51,9 +51,14 @@ export class RealtimeAudioTap {
 
       // Listen for PCM chunks from worklet
       this.workletNode.port.onmessage = (event) => {
-        const { type, data, responseId, sequenceNumber } = event.data;
+        const { type, data, responseId, sequenceNumber, hasAudio, maxAmplitude } = event.data;
         
         if (type === 'PCM_CHUNK' && this.isCapturing && this.onAudioChunk) {
+          // Log every 50th chunk to monitor audio flow
+          if (sequenceNumber % 50 === 0) {
+            console.log(`🎵 [RealtimeAudioTap] Chunk #${sequenceNumber}: hasAudio=${hasAudio}, maxAmp=${maxAmplitude?.toFixed(4)}`);
+          }
+          
           // Convert raw ArrayBuffer to base64 in main thread (btoa available here)
           const uint8Array = new Uint8Array(data);
           let binaryString = '';

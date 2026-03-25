@@ -49,6 +49,22 @@ class AudioTapProcessor extends AudioWorkletProcessor {
       return true;
     }
     
+    // Check if audio is actually non-zero (detect silence)
+    let hasNonZeroSamples = false;
+    let maxAmplitude = 0;
+    for (let i = 0; i < frameCount; i++) {
+      const absValue = Math.abs(inputChannel[i]);
+      if (absValue > 0.001) { // Threshold for "non-zero"
+        hasNonZeroSamples = true;
+      }
+      maxAmplitude = Math.max(maxAmplitude, absValue);
+    }
+    
+    // Log every 100th chunk to avoid spam
+    if (this.sequenceNumber % 100 === 0) {
+      console.log(`[AudioTapProcessor] Chunk #${this.sequenceNumber}: hasAudio=${hasNonZeroSamples}, maxAmp=${maxAmplitude.toFixed(4)}, frames=${frameCount}`);
+    }
+    
     // Convert Float32 PCM to Int16 PCM
     const int16Samples = new Int16Array(frameCount);
     for (let i = 0; i < frameCount; i++) {
@@ -65,7 +81,9 @@ class AudioTapProcessor extends AudioWorkletProcessor {
       responseId: this.currentResponseId,
       sequenceNumber: this.sequenceNumber++,
       sampleCount: frameCount,
-      timestamp: currentTime
+      timestamp: currentTime,
+      hasAudio: hasNonZeroSamples,
+      maxAmplitude: maxAmplitude
     }, [int16Samples.buffer]); // Transfer ownership for performance
     
     return true;
