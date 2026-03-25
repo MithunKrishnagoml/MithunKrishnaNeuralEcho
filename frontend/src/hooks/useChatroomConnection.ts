@@ -723,6 +723,26 @@ export function useChatroomConnection({ roomId, participant, onEvent }: UseChatr
     });
   }, [participant.id, roomId, sendEvent]);
 
+  const sendAIAudioChunk = useCallback((audioData: string, sequenceNumber: number) => {
+    sendEvent({
+      type: 'AI_AUDIO_CHUNK',
+      sessionId: roomId,
+      participantId: participant.id,
+      audioData: audioData,
+      seq: sequenceNumber,
+      timestamp: Date.now(),
+    });
+  }, [participant.id, roomId, sendEvent]);
+
+  const sendAIAudioEnd = useCallback(() => {
+    sendEvent({
+      type: 'AI_AUDIO_END',
+      sessionId: roomId,
+      participantId: participant.id,
+      timestamp: Date.now(),
+    });
+  }, [participant.id, roomId, sendEvent]);
+
   const sendVoiceActivity = useCallback((type: 'VOICE_ACTIVITY_STARTED' | 'VOICE_ACTIVITY_STOPPED') => {
     sendEvent({
       type,
@@ -794,6 +814,8 @@ export function useChatroomConnection({ roomId, participant, onEvent }: UseChatr
     sendTranslationDelta,
     sendAudioChunk,
     sendAudioStreamEnd,
+    sendAIAudioChunk,
+    sendAIAudioEnd,
     sendVoiceActivity,
     startRecording,
     stopRecording,

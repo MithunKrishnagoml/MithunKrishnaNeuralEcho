@@ -19,6 +19,8 @@ interface UseRoomTranslationProps {
   sendTranslationDelta: (delta: string, responseId: string, targetLanguage: 'en-US' | 'fr-CA') => void;
   sendAudioChunk: (audioData: string, responseId: string, sequenceNumber?: number) => void;
   sendAudioStreamEnd: (responseId: string) => void;
+  sendAIAudioChunk: (audioData: string, sequenceNumber: number) => void;
+  sendAIAudioEnd: () => void;
   sendVoiceActivity: (type: 'VOICE_ACTIVITY_STARTED' | 'VOICE_ACTIVITY_STOPPED') => void;
   isConnected: boolean;
 }
@@ -33,6 +35,8 @@ export function useRoomTranslation({
   sendTranslationDelta,
   sendAudioChunk,
   sendAudioStreamEnd,
+  sendAIAudioChunk,
+  sendAIAudioEnd,
   sendVoiceActivity,
   isConnected 
 }: UseRoomTranslationProps) {
@@ -47,6 +51,7 @@ export function useRoomTranslation({
     updateSpeakerLanguage,
     setActiveSpeakerId,
     setTranslatedAudioCallback,
+    setAIAudioChunkCallback,
     setTranscriptCallback,
     setRealtimeStreamingCallbacks
   } = useAppState();
@@ -113,6 +118,18 @@ export function useRoomTranslation({
     };
   }, [sendTranslatedAudio, setTranslatedAudioCallback]);
 
+  // Register AI audio chunk callback so AppContext can send AI audio chunks to room
+  useEffect(() => {
+    console.log('🔧 [Room Translation] Registering sendAIAudioChunk callback');
+    setAIAudioChunkCallback(sendAIAudioChunk);
+    
+    // Cleanup on unmount
+    return () => {
+      console.log('🔧 [Room Translation] Clearing sendAIAudioChunk callback');
+      setAIAudioChunkCallback(null);
+    };
+  }, [sendAIAudioChunk, setAIAudioChunkCallback]);
+
   // Register transcript callback so AppContext can send transcripts to backend
   useEffect(() => {
     console.log('🔧 [Room Translation] Registering sendTranscript callback');
@@ -127,7 +144,6 @@ export function useRoomTranslation({
 
   useEffect(() => {
     const otherLanguage = participant.language === 'en-US' ? 'fr-CA' : 'en-US';
-    let aiAudioSeq = 0;
 
     setRealtimeStreamingCallbacks({
       onVoiceActivityStarted: () => {
@@ -147,20 +163,14 @@ export function useRoomTranslation({
       },
       onAIAudioChunk: (audioData: string, sequenceNumber: number) => {
         // Send AI audio chunk to backend for relay to all participants
-        sendEvent({
-          type: 'AI_AUDIO_CHUNK',
-          participantId: participant.id,
-          audioData,
-          seq: aiAudioSeq++,
-          timestamp: Date.now()
-        });
+        sendAIAudioChunk(audioData, sequenceNumber);
       },
     });
 
     return () => {
       setRealtimeStreamingCallbacks(null);
     };
-  }, [participant.language, sendAudioChunk, sendPartialTranscript, sendTranslationDelta, sendVoiceActivity, setRealtimeStreamingCallbacks]);
+  }, [participant.language, sendAudioChunk, sendAIAudioChunk, sendPartialTranscript, sendTranslationDelta, sendVoiceActivity, setRealtimeStreamingCallbacks]);
 
   // Initialize voice session when room is ready
   useEffect(() => {

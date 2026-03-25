@@ -791,14 +791,15 @@ wss.on('connection', (ws, req) => {
         const translationSession = translationSessions.get(sessionId);
         if (!translationSession) return;
 
-        // Broadcast AI audio chunk to ALL participants (including sender)
-        // Both users need to hear the AI voice
+        // Broadcast as AUDIO_CHUNK (matches what frontend expects)
         const chunkMessage = {
-          type: 'AI_AUDIO_CHUNK',
+          type: 'AUDIO_CHUNK',
           sessionId: sessionId,
-          fromParticipant: participantId,
-          audioData: audioData,
-          seq: seq,
+          participantId: participantId,
+          pcmData: audioData,
+          sampleRate: 24000,
+          sequenceNumber: seq,
+          responseId: `ai_response_${Date.now()}`,
           timestamp: Date.now()
         };
 
@@ -811,7 +812,41 @@ wss.on('connection', (ws, req) => {
         }
         
         if (sentCount > 0) {
-          console.log(`🤖 [AI_AUDIO_CHUNK] Broadcast to ${sentCount} participant(s)`);
+          console.log(`🤖 [AI_AUDIO_CHUNK] Broadcast as AUDIO_CHUNK to ${sentCount} participant(s)`);
+        }
+      }
+
+      // Handle AI audio stream end
+      if (data.type === 'AI_AUDIO_END') {
+        const { participantId } = data;
+        console.log(`🏁 [AI_AUDIO_END] From ${participantId}`);
+        
+        const connection = activeConnections.get(ws);
+        if (!connection) return;
+
+        const { sessionId } = connection;
+        const translationSession = translationSessions.get(sessionId);
+        if (!translationSession) return;
+
+        // Broadcast stream end to all participants
+        const endMessage = {
+          type: 'AUDIO_STREAM_END',
+          sessionId: sessionId,
+          participantId: participantId,
+          responseId: `ai_response_${Date.now()}`,
+          timestamp: Date.now()
+        };
+
+        let sentCount = 0;
+        for (const [userId, participant] of translationSession.participants.entries()) {
+          if (participant.socket && participant.socket.readyState === WebSocket.OPEN) {
+            participant.socket.send(JSON.stringify(endMessage));
+            sentCount++;
+          }
+        }
+        
+        if (sentCount > 0) {
+          console.log(`🏁 [AI_AUDIO_END] Broadcast as AUDIO_STREAM_END to ${sentCount} participant(s)`);
         }
       }
 

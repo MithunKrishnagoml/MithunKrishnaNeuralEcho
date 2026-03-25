@@ -276,6 +276,8 @@ interface AppContextType {
   setShowDownloadPanel: (show: boolean) => void;
   // Room audio callback
   setTranslatedAudioCallback: (callback: ((audioData: string, originalText: string, translatedText: string) => void) | null) => void;
+  // Room AI audio chunk callback
+  setAIAudioChunkCallback: (callback: ((audioData: string, sequenceNumber: number) => void) | null) => void;
   // Room transcript callback
   setTranscriptCallback: (callback: ((transcript: string, language: 'en-US' | 'fr-CA') => void) | null) => void;
   // Room realtime streaming callbacks
@@ -304,6 +306,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<AppStatus>("idle");
   const [activeSpeakerId, setActiveSpeakerId] = useState(0);
   const translatedAudioCallbackRef = useRef<((audioData: string, originalText: string, translatedText: string) => void) | null>(null);
+  const aiAudioChunkCallbackRef = useRef<((audioData: string, sequenceNumber: number) => void) | null>(null);
   const realtimeStreamingCallbacksRef = useRef<RealtimeStreamingCallbacks | null>(null);
   const transcriptCallbackRef = useRef<((transcript: string, language: 'en-US' | 'fr-CA') => void) | null>(null);
   const [speakerCount, setSpeakerCount] = useState(2);
@@ -793,6 +796,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
           onAudioChunk: (audioData: string, responseId: string) => {
             realtimeStreamingCallbacksRef.current?.onAudioChunk?.(audioData, responseId);
           },
+          onAIAudioChunk: (audioData: string, sequenceNumber: number) => {
+            // Send AI audio chunk to backend for relay to other participant
+            if (aiAudioChunkCallbackRef.current) {
+              aiAudioChunkCallbackRef.current(audioData, sequenceNumber);
+            }
+          },
           onSilenceDetected: () => {
             console.log('ℹ️ [SILENCE] No speech detected');
             setStatus("idle");
@@ -815,6 +824,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const setTranslatedAudioCallback = useCallback((callback: ((audioData: string, originalText: string, translatedText: string) => void) | null) => {
     console.log('🔧 [AppContext] Registering translated audio callback:', callback ? 'REGISTERED' : 'CLEARED');
     translatedAudioCallbackRef.current = callback;
+  }, []);
+
+  const setAIAudioChunkCallback = useCallback((callback: ((audioData: string, sequenceNumber: number) => void) | null) => {
+    console.log('🔧 [AppContext] Registering AI audio chunk callback:', callback ? 'REGISTERED' : 'CLEARED');
+    aiAudioChunkCallbackRef.current = callback;
   }, []);
 
   const setTranscriptCallback = useCallback((callback: ((transcript: string, language: 'en-US' | 'fr-CA') => void) | null) => {
@@ -864,6 +878,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     showDownloadPanel,
     setShowDownloadPanel,
     setTranslatedAudioCallback,
+    setAIAudioChunkCallback,
     setTranscriptCallback,
     setRealtimeStreamingCallbacks,
   };

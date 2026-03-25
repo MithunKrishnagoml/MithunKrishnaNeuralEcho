@@ -341,6 +341,9 @@ export function ChatroomInterface({ roomId, participant, onLeaveRoom }: Chatroom
     sendPartialTranscript,
     sendTranslationDelta,
     sendAudioChunk,
+    sendAudioStreamEnd,
+    sendAIAudioChunk,
+    sendAIAudioEnd,
     sendVoiceActivity,
     isConnected
   });

@@ -144,6 +144,7 @@ export function useRealtimeVoice() {
     onTranslationDelta?: (delta: string, responseId: string) => void;
     onAudioChunk?: (audioData: string, responseId: string) => void;
     onAIAudioChunk?: (audioData: string, sequenceNumber: number) => void;
+    onSilenceDetected?: () => void;
   } | null>(null);
 
   const handleDataChannelMessage = useCallback((evt: MessageEvent) => {
@@ -449,6 +450,7 @@ export function useRealtimeVoice() {
         
         pc.ontrack = (e) => {
           const remoteStream = e.streams[0];
+          const track = e.track;
           
           // RELAY CAPTURE: Connect remote stream to capture element (MUTED)
           if (relayCaptureAudio) {
@@ -457,33 +459,57 @@ export function useRealtimeVoice() {
           }
           
           // Set up real-time audio tap for streaming chunks (uses relay capture stream)
-          try {
-            const audioTrack = remoteStream.getAudioTracks()[0];
-            if (audioTrack) {
-              audioTapRef.current = new RealtimeAudioTap(
-                // onAudioChunk callback - send to room via WebSocket
-                (pcmData: string, responseId: string, sequenceNumber: number) => {
-                  // Send to local audio player
-                  if (callbacksRef.current?.onAudioChunk) {
-                    callbacksRef.current.onAudioChunk(pcmData, responseId);
+          // Wait for track to unmute before initializing
+          const initializeAudioTap = () => {
+            try {
+              const audioTrack = remoteStream.getAudioTracks()[0];
+              if (audioTrack) {
+                audioTapRef.current = new RealtimeAudioTap(
+                  // onAudioChunk callback - send to local audio player
+                  (pcmData: string, responseId: string, sequenceNumber: number) => {
+                    // Send to local audio player
+                    if (callbacksRef.current?.onAudioChunk) {
+                      callbacksRef.current.onAudioChunk(pcmData, responseId);
+                    }
+                    
+                    // RELAY TO BACKEND: Send AI audio chunk to all participants
+                    if (callbacksRef.current?.onAIAudioChunk) {
+                      callbacksRef.current.onAIAudioChunk(pcmData, sequenceNumber);
+                    }
+                  },
+                  // onStreamEnd callback
+                  (responseId: string) => {
+                    console.log('🏁 [RealtimeAudioTap] Stream ended for response:', responseId);
+                    // Notify backend that stream ended
+                    if (callbacksRef.current?.onSilenceDetected) {
+                      // Reuse onSilenceDetected callback to signal stream end
+                      // The parent component will send AI_AUDIO_END
+                    }
                   }
-                  
-                  // RELAY TO BACKEND: Send AI audio chunk to all participants
-                  if (callbacksRef.current?.onAIAudioChunk) {
-                    callbacksRef.current.onAIAudioChunk(pcmData, sequenceNumber);
-                  }
-                },
-                // onStreamEnd callback
-                (responseId: string) => {
-                  console.log('🏁 [RealtimeAudioTap] Stream ended for response:', responseId);
-                }
-              );
-              
-              audioTapRef.current.initialize(audioTrack);
-              console.log('🎤 [RealtimeAudioTap] Initialized for real-time streaming and relay');
+                );
+                
+                audioTapRef.current.initialize(audioTrack);
+                console.log('🎤 [RealtimeAudioTap] Initialized for real-time streaming and relay');
+              }
+            } catch (error) {
+              console.warn('⚠️ [RealtimeAudioTap] Failed to set up real-time audio tap:', error);
             }
-          } catch (error) {
-            console.warn('⚠️ [RealtimeAudioTap] Failed to set up real-time audio tap:', error);
+          };
+          
+          // Wait for track to unmute before initializing tap
+          const handleUnmute = () => {
+            console.log('🎵 [RELAY CAPTURE] Track unmuted - now initializing AudioTap');
+            initializeAudioTap();
+            track.removeEventListener('unmute', handleUnmute);
+          };
+          
+          if (track.muted) {
+            console.log('🎵 [RELAY CAPTURE] Track is muted, waiting for unmute event...');
+            track.addEventListener('unmute', handleUnmute);
+          } else {
+            // Already unmuted, attach immediately
+            console.log('🎵 [RELAY CAPTURE] Track already unmuted, initializing immediately');
+            initializeAudioTap();
           }
           
           // Keep MediaRecorder as fallback for local recording/saving (uses relay capture stream)
@@ -848,13 +874,16 @@ export function useRealtimeVoice() {
       micWorkletNodeRef.current = null;
     }
     
-    // Cleanup real-time audio tap
+    // Cleanup audio tap
     if (audioTapRef.current) {
-      audioTapRef.current.dispose();
+      try {
+        audioTapRef.current.stopCapture();
+      } catch (e) {
+        console.error('Error cleaning up audio tap:', e);
+      }
       audioTapRef.current = null;
     }
     
-    // Stop and cleanup MediaRecorder
     if (mediaRecorderRef.current) {
       if (mediaRecorderRef.current.state === 'recording') {
         mediaRecorderRef.current.stop();
