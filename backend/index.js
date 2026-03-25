@@ -1082,7 +1082,7 @@ async function initializeOpenAIConnection(userId, translationSession) {
             silence_duration_ms: 200,            // Reduced from 300 → 200 for faster response
             prefix_padding_ms: 100               // Reduced from 200 → 100 for less pre-roll
           },
-          temperature: 0.3,                      // low = more deterministic, faster
+          temperature: 0.6,                      // OpenAI minimum is 0.6
           max_response_output_tokens: 200,       // cap prevents runaway generation
           tools: [],
           tool_choice: 'none'
