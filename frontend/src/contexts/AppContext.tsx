@@ -276,6 +276,8 @@ interface AppContextType {
   setShowDownloadPanel: (show: boolean) => void;
   // Room audio callback
   setTranslatedAudioCallback: (callback: ((audioData: string, originalText: string, translatedText: string) => void) | null) => void;
+  // Room transcript callback
+  setTranscriptCallback: (callback: ((transcript: string, language: 'en-US' | 'fr-CA') => void) | null) => void;
   // Room realtime streaming callbacks
   setRealtimeStreamingCallbacks: (callbacks: RealtimeStreamingCallbacks | null) => void;
 }
@@ -303,6 +305,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [activeSpeakerId, setActiveSpeakerId] = useState(0);
   const translatedAudioCallbackRef = useRef<((audioData: string, originalText: string, translatedText: string) => void) | null>(null);
   const realtimeStreamingCallbacksRef = useRef<RealtimeStreamingCallbacks | null>(null);
+  const transcriptCallbackRef = useRef<((transcript: string, language: 'en-US' | 'fr-CA') => void) | null>(null);
   const [speakerCount, setSpeakerCount] = useState(2);
   const [speakers, setSpeakers] = useState<Speaker[]>(() => createSpeakers(2));
   const [messages, setMessages] = useState<ConversationMessage[]>([]);
@@ -684,6 +687,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
               sourceLang: activeSpeaker.language
             });
             addMessage(message);
+            
+            // Send transcript to backend via registered callback
+            if (transcriptCallbackRef.current) {
+              console.log('📤 [onTranscript] Sending transcript to backend via callback');
+              transcriptCallbackRef.current(transcript, activeSpeaker.language);
+            } else {
+              console.warn('⚠️ [onTranscript] No transcript callback registered - not sent to backend');
+            }
           }
         },
         
@@ -806,6 +817,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
     translatedAudioCallbackRef.current = callback;
   }, []);
 
+  const setTranscriptCallback = useCallback((callback: ((transcript: string, language: 'en-US' | 'fr-CA') => void) | null) => {
+    console.log('🔧 [AppContext] Registering transcript callback:', callback ? 'REGISTERED' : 'CLEARED');
+    transcriptCallbackRef.current = callback;
+  }, []);
+
   const setRealtimeStreamingCallbacks = useCallback((callbacks: RealtimeStreamingCallbacks | null) => {
     console.log('🔧 [AppContext] Registering realtime streaming callbacks:', callbacks ? 'REGISTERED' : 'CLEARED');
     realtimeStreamingCallbacksRef.current = callbacks;
@@ -848,6 +864,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     showDownloadPanel,
     setShowDownloadPanel,
     setTranslatedAudioCallback,
+    setTranscriptCallback,
     setRealtimeStreamingCallbacks,
   };
 

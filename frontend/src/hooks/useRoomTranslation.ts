@@ -47,6 +47,7 @@ export function useRoomTranslation({
     updateSpeakerLanguage,
     setActiveSpeakerId,
     setTranslatedAudioCallback,
+    setTranscriptCallback,
     setRealtimeStreamingCallbacks
   } = useAppState();
 
@@ -111,6 +112,18 @@ export function useRoomTranslation({
       setTranslatedAudioCallback(null);
     };
   }, [sendTranslatedAudio, setTranslatedAudioCallback]);
+
+  // Register transcript callback so AppContext can send transcripts to backend
+  useEffect(() => {
+    console.log('🔧 [Room Translation] Registering sendTranscript callback');
+    setTranscriptCallback(sendTranscript);
+    
+    // Cleanup on unmount
+    return () => {
+      console.log('🔧 [Room Translation] Clearing sendTranscript callback');
+      setTranscriptCallback(null);
+    };
+  }, [sendTranscript, setTranscriptCallback]);
 
   useEffect(() => {
     const otherLanguage = participant.language === 'en-US' ? 'fr-CA' : 'en-US';
