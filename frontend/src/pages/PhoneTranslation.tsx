@@ -6,7 +6,6 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Link } from "react-router-dom";
-import gomlLogo from "@/assets/goml-logo.png";
 
 interface CallSession {
   callSid: string;
@@ -60,9 +59,7 @@ const PhoneTranslation = () => {
                     NeuralEcho Phone
                   </h1>
                   <div className="inline-flex items-center gap-1 text-[10px] text-muted-foreground/50">
-                    <span>A</span>
-                    <img src={gomlLogo} alt="GoML" className="h-2.5 opacity-60" />
-                    <span>Demo</span>
+                    <span>A GoML Demo</span>
                   </div>
                 </div>
               </div>
