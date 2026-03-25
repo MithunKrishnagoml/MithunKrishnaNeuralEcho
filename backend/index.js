@@ -1078,9 +1078,9 @@ async function initializeOpenAIConnection(userId, translationSession) {
           },
           turn_detection: {
             type: 'server_vad',
-            threshold: 0.3,                      // Keep at 0.3 for good balance
-            silence_duration_ms: 200,            // Reduced from 300 → 200 for faster response
-            prefix_padding_ms: 100               // Reduced from 200 → 100 for less pre-roll
+            threshold: 0.5,                      // Increased from 0.3 for better sensitivity
+            silence_duration_ms: 500,            // Increased from 200 to capture more speech
+            prefix_padding_ms: 300               // Increased from 100 to capture speech start
           },
           temperature: 0.6,                      // OpenAI minimum is 0.6
           max_response_output_tokens: 200,       // cap prevents runaway generation
