@@ -539,12 +539,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setVoiceMode(mode);
     voiceModeRef.current = mode;
     
-    // Reinit if session is active, or initialize if disconnected
-    if (sessionState !== "disconnected") {
-      console.log('🔄 [setVoiceModeAndInit] Reinitializing existing session');
-      reinitSession();
-    } else {
-      console.log('🔄 [setVoiceModeAndInit] Session disconnected, initializing new session');
+    // 🔥 CRITICAL FIX: Don't reinitialize if session is already ready or connecting
+    // This prevents the "Data channel closed" issue
+    if (sessionState === "ready" || sessionState === "connecting") {
+      console.log('⚠️ [setVoiceModeAndInit] Session already active (state:', sessionState, '), skipping reinit to prevent connection break');
+      return;
+    }
+    
+    // Only initialize if session is disconnected or in error state
+    if (sessionState === "disconnected" || sessionState === "error") {
+      console.log('🔄 [setVoiceModeAndInit] Session disconnected/error, initializing new session');
       // Initialize a new session when disconnected
       const activeSpeaker = speakersRef.current[activeSpeakerIdRef.current];
       const otherSpeakers = speakersRef.current.filter((s) => s.id !== activeSpeakerIdRef.current);
@@ -568,7 +572,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         );
       }
     }
-  }, [sessionState, reinitSession, dbThreshold, initSession]);
+  }, [sessionState, dbThreshold, initSession]);
 
   const downloadRecording = useCallback(() => {
     downloadRecordingFile();

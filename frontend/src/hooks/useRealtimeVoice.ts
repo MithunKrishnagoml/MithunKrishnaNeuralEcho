@@ -926,22 +926,65 @@ export function useRealtimeVoice() {
 
   /** Enable mic audio track (unmute) */
   const enableMic = useCallback(() => {
+    console.log('🎤 [enableMic] Starting - enabling microphone');
+    
     // Record when mic button was pressed for silence detection
     micPressStartTimeRef.current = Date.now();
     
-    // Clear audio buffer before enabling mic to prevent gibberish from previous audio
-    if (dcRef.current && dcRef.current.readyState === 'open') {
-      console.log('🧹 [Audio Buffer] Clearing input audio buffer to prevent contamination');
-      try {
-        dcRef.current.send(JSON.stringify({ type: 'input_audio_buffer.clear' }));
-        console.log('✅ [Audio Buffer] Clear command sent');
-      } catch (error) {
-        console.error('❌ [Audio Buffer] Failed to clear buffer:', error);
+    // Resume AudioContext if suspended (browser autoplay policy)
+    if (audioContextRef.current) {
+      console.log('🔊 [enableMic] AudioContext state:', audioContextRef.current.state);
+      if (audioContextRef.current.state === 'suspended') {
+        audioContextRef.current.resume().then(() => {
+          console.log('✅ [enableMic] AudioContext resumed from suspended state');
+        }).catch((error) => {
+          console.error('❌ [enableMic] Failed to resume AudioContext:', error);
+        });
       }
     }
     
-    streamRef.current?.getTracks().forEach((t) => (t.enabled = true));
+    // Clear audio buffer before enabling mic to prevent gibberish from previous audio
+    if (dcRef.current && dcRef.current.readyState === 'open') {
+      console.log('🧹 [enableMic] Clearing input audio buffer to prevent contamination');
+      try {
+        dcRef.current.send(JSON.stringify({ type: 'input_audio_buffer.clear' }));
+        console.log('✅ [enableMic] Clear command sent');
+      } catch (error) {
+        console.error('❌ [enableMic] Failed to clear buffer:', error);
+      }
+    } else {
+      console.warn('⚠️ [enableMic] Data channel not open, cannot clear buffer. State:', dcRef.current?.readyState);
+    }
+    
+    // Enable all audio tracks
+    const tracks = streamRef.current?.getTracks() || [];
+    console.log(`🎤 [enableMic] Enabling ${tracks.length} tracks`);
+    tracks.forEach((t, index) => {
+      console.log(`🎤 [enableMic] Track ${index} BEFORE enable:`, {
+        kind: t.kind,
+        enabled: t.enabled,
+        readyState: t.readyState,
+        muted: t.muted,
+        label: t.label
+      });
+      t.enabled = true;
+    });
+    
+    // Verify tracks are enabled after a short delay
+    setTimeout(() => {
+      const verifyTracks = streamRef.current?.getTracks() || [];
+      verifyTracks.forEach((t, index) => {
+        console.log(`✅ [enableMic] Track ${index} AFTER enable:`, {
+          kind: t.kind,
+          enabled: t.enabled,
+          readyState: t.readyState,
+          muted: t.muted
+        });
+      });
+    }, 100);
+    
     startAudioMonitoring();
+    console.log('✅ [enableMic] Microphone enabled and monitoring started');
   }, [startAudioMonitoring]);
 
   /** Disable mic audio track (mute) */
