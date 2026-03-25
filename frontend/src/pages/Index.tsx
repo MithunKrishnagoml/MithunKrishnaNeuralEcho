@@ -3,7 +3,6 @@ import { Settings, Trash2, Plus, Volume2, Hand, Radio, MessageSquare, Download, 
 import { Link } from "react-router-dom";
 import { OPENAI_VOICES } from "@/lib/constants";
 import { useState, useEffect } from "react";
-import gomlLogo from "@/assets/goml-logo.png";
 import { TranslationPanel } from "@/components/TranslationPanel";
 import { RecordingStatus } from "@/components/RecordingStatus";
 import { DownloadPanel } from "@/components/DownloadPanel";
@@ -19,13 +18,6 @@ const Index = () => {
 
   return (
     <div className="h-screen bg-background flex flex-col overflow-hidden relative">
-      {/* GoML Background */}
-      <div className="goml-bg">
-        <div className="goml-pattern goml-pattern-1">GoML</div>
-        <div className="goml-pattern goml-pattern-2">GoML</div>
-        <div className="goml-pattern goml-pattern-3">GoML</div>
-      </div>
-
       {/* Header */}
       <header className="flex items-center justify-between px-5 py-3 border-b border-primary/20">
         <div className="flex items-center gap-3">
@@ -38,9 +30,7 @@ const Index = () => {
               rel="noopener noreferrer"
               className="inline-flex items-center gap-1 text-[11px] text-muted-foreground/50 hover:text-muted-foreground/70 transition-colors duration-300"
             >
-              <span>A</span>
-              <img src={gomlLogo} alt="GoML" className="h-3 opacity-60 hover:opacity-80 transition-opacity duration-300" />
-              <span>Demo App</span>
+              <span>A GoML Demo App</span>
             </a>
           </div>
         </div>

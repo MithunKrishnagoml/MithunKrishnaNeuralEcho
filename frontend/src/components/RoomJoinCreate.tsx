@@ -55,13 +55,6 @@ export function RoomJoinCreate({ onCreateRoom, onJoinRoom, isLoading = false, pr
 
   return (
     <div className="min-h-screen bg-background flex items-center justify-center p-6 relative">
-      {/* GoML Background */}
-      <div className="goml-bg">
-        <div className="goml-pattern goml-pattern-1">GoML</div>
-        <div className="goml-pattern goml-pattern-2">GoML</div>
-        <div className="goml-pattern goml-pattern-3">GoML</div>
-      </div>
-
       <div className="w-full max-w-md space-y-6 relative z-10">
         {/* Header */}
         <div className="text-center space-y-2">

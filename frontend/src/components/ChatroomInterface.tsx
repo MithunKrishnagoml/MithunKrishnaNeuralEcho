@@ -657,13 +657,6 @@ export function ChatroomInterface({ roomId, participant, onLeaveRoom }: Chatroom
 
   return (
     <div className="h-screen bg-background flex flex-col overflow-hidden relative">
-      {/* GoML Background */}
-      <div className="goml-bg">
-        <div className="goml-pattern goml-pattern-1">GoML</div>
-        <div className="goml-pattern goml-pattern-2">GoML</div>
-        <div className="goml-pattern goml-pattern-3">GoML</div>
-      </div>
-
       {/* Header */}
       <header className="flex items-center justify-between px-5 py-3 border-b border-primary/20 relative z-10">
         <div className="flex items-center gap-3">
