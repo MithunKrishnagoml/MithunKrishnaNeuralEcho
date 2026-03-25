@@ -91,6 +91,14 @@ export type ChatroomEvent =
   | { type: 'SPEECH_TRANSCRIPT'; participantId: string; transcript: string; language: 'en-US' | 'fr-CA'; fromParticipant?: string; originalText?: string; originalLanguage?: 'en-US' | 'fr-CA'; timestamp?: number }
   | { type: 'TRANSLATED_MESSAGE'; sessionId?: string; fromParticipant?: string; message: ChatroomMessage; timestamp: number }
   | { type: 'TRANSLATED_AUDIO'; sessionId?: string; fromParticipant?: string; audioData: string; timestamp: number; quality?: string; processingTime?: number }
+  | { type: 'translation_audio_chunk'; audio: string; seq: number; speakerId: string; sessionId: string; timestamp: number }
+  | { type: 'translation_audio_done'; speakerId: string; sessionId: string; timestamp: number }
+  | { type: 'translation_interrupted'; speakerId: string; timestamp: number }
+  | { type: 'vad_speaking'; speakerId: string; speaking: boolean; timestamp: number }
+  | { type: 'transcript_input_delta'; text: string; speakerId: string; timestamp: number }
+  | { type: 'transcript_input_done'; text: string; speakerId: string; timestamp: number }
+  | { type: 'transcript_output_delta'; text: string; speakerId: string; timestamp: number }
+  | { type: 'transcript_output_done'; text: string; speakerId: string; timestamp: number }
   | { type: 'ROOM_HISTORY_UPDATE'; sessionId: string; messageHistory: ChatroomMessage[]; totalMessages?: number; latestMessage?: ChatroomMessage }
   | { type: 'TRANSCRIPT_HISTORY_UPDATE'; sessionId: string; transcriptHistory: TranscriptMessage[]; totalMessages?: number; latestMessage?: TranscriptMessage }
   | { type: 'TRANSCRIPT_MESSAGE_ADDED'; sessionId: string; message: TranscriptMessage }
