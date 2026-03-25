@@ -25,6 +25,7 @@ app.use(cors({
     'http://localhost:5173',
     'https://neuralecho.vercel.app',
     'https://neuralecho1.vercel.app',
+    'https://neuralecho1-pe9i87uag-smithun2004-9533s-projects.vercel.app',
     'https://neural-echo.vercel.app',
     'https://*.vercel.app'
   ],
