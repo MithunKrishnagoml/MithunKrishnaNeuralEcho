@@ -867,7 +867,7 @@ export function ChatroomInterface({ roomId, participant, onLeaveRoom }: Chatroom
                         <div className="text-center py-12">
                           <MessageCircle className="w-12 h-12 mx-auto text-muted-foreground/30 mb-3" />
                           <p className="text-sm text-muted-foreground">No messages yet</p>
-                          <p className="text-xs text-muted-foreground/70 mt-1">Hold the microphone button or press spacebar to speak</p>
+                          <p className="text-xs text-muted-foreground/70 mt-1">Click the mic button to unmute and start speaking</p>
                         </div>
                       )}
                     
