@@ -14,9 +14,9 @@ class AudioStreamingProcessor extends AudioWorkletProcessor {
     this.consecutiveSilentFrames = 0;
     this.currentResponseId = null;
     
-    // Jitter buffer settings - reduced for faster playback start
-    this.JITTER_BUFFER_SIZE = 480; // 20ms at 24kHz (was 100ms, too long)
-    this.SILENCE_THRESHOLD_FRAMES = 480; // 10ms of silence at 48kHz sample rate
+    // Jitter buffer settings - minimal for real-time streaming
+    this.JITTER_BUFFER_SIZE = 480; // 20ms at 24kHz (minimal latency)
+    this.SILENCE_THRESHOLD_FRAMES = 480; // 20ms of silence at 24kHz
     
     // Listen for messages from main thread
     this.port.onmessage = (event) => {

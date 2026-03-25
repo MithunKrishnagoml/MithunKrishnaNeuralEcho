@@ -36,17 +36,8 @@ export class StreamingAudioPlayer {
   private isDestroyed: boolean = false;
   private options: Required<StreamingAudioPlayerOptions>;
   private userGestureReceived: boolean = false;
-  private currentResponseId: string | null = null;
   private keepAliveIntervalId: number | null = null;
-  private underrunFrameCount: number = 0;
-  private isBuffering: boolean = false;
-  private readonly JITTER_BUFFER_SIZE = 2400; // 100ms at 24kHz
-  private readonly UNDERRUN_THRESHOLD = 10; // frames before reset
   private readonly KEEP_ALIVE_INTERVAL = 25000; // 25 seconds
-  
-  // PCM chunk buffering by responseId - collect chunks and play as complete block
-  private pcmChunkBuffer: Map<string, Int16Array[]> = new Map();
-  private responseIdQueue: string[] = [];
 
   constructor(options: StreamingAudioPlayerOptions = {}) {
     this.options = {
@@ -263,28 +254,16 @@ export class StreamingAudioPlayer {
     }
 
     try {
-      // Detect responseId change
-      if (this.currentResponseId !== null && this.currentResponseId !== chunk.responseId) {
-        console.log('🧹 [StreamingAudioPlayer] ResponseId CHANGED - playing buffered PCM:', {
-          previous: this.currentResponseId,
-          current: chunk.responseId
-        });
-        // Play the complete buffered response before switching
-        await this.playBufferedPCMResponse(this.currentResponseId);
-      }
-      
-      this.currentResponseId = chunk.responseId;
-
       // CRITICAL: Resume AudioContext before processing any chunk
       await this.ensureAudioContextResumed();
 
       let samples: Float32Array;
 
       // Check if this is PCM data (from real-time streaming) or WebM blob (fallback)
-      if (chunk.data.length < 1000 && chunk.sequenceNumber !== undefined) {
-        // This is PCM data - PLAY IMMEDIATELY for real-time streaming
+      if (chunk.sequenceNumber !== undefined) {
+        // ✅ REAL-TIME PCM STREAMING - Play immediately
         if (this.options.debug) {
-          console.log('[StreamingAudioPlayer] Processing real-time PCM chunk:', chunk.id, 'seq:', chunk.sequenceNumber);
+          console.log('[StreamingAudioPlayer] Real-time PCM chunk:', chunk.id, 'seq:', chunk.sequenceNumber);
         }
         
         // Decode base64 to Int16 PCM
@@ -304,7 +283,7 @@ export class StreamingAudioPlayer {
           float32Samples[i] = sample < 0 ? sample / 32768.0 : sample / 32767.0;
         }
         
-        // Send samples to worklet IMMEDIATELY for real-time playback
+        // 🚀 SEND DIRECTLY TO WORKLET - NO BUFFERING
         this.workletNode.port.postMessage({
           type: 'ADD_SAMPLES',
           data: float32Samples,
@@ -312,7 +291,7 @@ export class StreamingAudioPlayer {
         });
         
         if (this.options.debug) {
-          console.log('[StreamingAudioPlayer] Sent', float32Samples.length, 'samples to worklet (real-time)');
+          console.log('[StreamingAudioPlayer] Sent', float32Samples.length, 'samples to worklet (real-time streaming)');
         }
         return;
         
@@ -381,8 +360,10 @@ export class StreamingAudioPlayer {
   }
 
   /**
+   * DEPRECATED: No longer used - PCM chunks now play immediately
    * Play a complete buffered PCM response
    */
+  /*
   private async playBufferedPCMResponse(responseId: string): Promise<void> {
     if (!this.audioContext || !this.workletNode || this.isDestroyed) {
       return;
@@ -436,6 +417,7 @@ export class StreamingAudioPlayer {
       this.options.onError(new Error(`Failed to play buffered PCM response ${responseId}: ${error}`));
     }
   }
+  */
 
   /**
    * Clear all queued audio
@@ -535,9 +517,6 @@ export class StreamingAudioPlayer {
 
     this.pendingChunks = [];
     this.isInitialized = false;
-    this.currentResponseId = null;
-    this.pcmChunkBuffer.clear();
-    this.responseIdQueue = [];
 
     if (this.options.debug) {
       console.log('[StreamingAudioPlayer] Disposed');
