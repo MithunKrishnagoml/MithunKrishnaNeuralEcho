@@ -112,6 +112,7 @@ export function ChatroomInterface({ roomId, participant, onLeaveRoom }: Chatroom
       // Handle streaming audio chunks
       if (event.type === 'translation_audio_chunk') {
         console.log(` [STREAMING AUDIO] Received chunk #${event.seq} from ${event.speakerId}`);
+        // Only play translation audio if it's from the OTHER participant (not your own voice)
         if (audioQueueRef.current && event.speakerId !== participant.id) {
           audioQueueRef.current.enqueue(event.audio, event.seq);
         }

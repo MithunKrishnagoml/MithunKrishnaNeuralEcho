@@ -1332,7 +1332,7 @@ async function handleOpenAIResponse(data, userId, translationSession) {
       
       console.log(`=��� [AUDIO DELTA] Received audio chunk for user ${userId}, size: ${audioData?.length || 0}`);
       
-      // Broadcast translated audio chunk to the other participant in the room
+      // Send translated audio chunk to the OTHER participant only (not the speaker)
       otherParticipant = translationSession.getOtherParticipant(userId);
       if (otherParticipant?.socket && otherParticipant.socket.readyState === WebSocket.OPEN) {
         // Initialize sequence counter if needed
