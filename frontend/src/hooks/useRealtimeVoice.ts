@@ -669,10 +669,17 @@ export function useRealtimeVoice() {
           microphone.connect(micWorkletNode);
           
           // Handle audio data from worklet
+          let audioChunkCount = 0;
           micWorkletNode.port.onmessage = (event) => {
             const { type, data } = event.data;
             
             if (type === 'AUDIO_DATA' && dcRef.current?.readyState === 'open') {
+              // Log every 100th chunk to avoid spam
+              if (audioChunkCount % 100 === 0) {
+                console.log(`🎤 [MIC AUDIO] Sending chunk #${audioChunkCount} to OpenAI (${data.byteLength} bytes)`);
+              }
+              audioChunkCount++;
+              
               // Convert Int16Array buffer to base64
               const int16Array = new Int16Array(data);
               const uint8Array = new Uint8Array(int16Array.buffer);
@@ -687,6 +694,10 @@ export function useRealtimeVoice() {
                 type: 'input_audio_buffer.append',
                 audio: base64Audio
               }));
+            } else if (type === 'AUDIO_DATA' && dcRef.current?.readyState !== 'open') {
+              if (audioChunkCount === 0) {
+                console.error('❌ [MIC AUDIO] DataChannel not open! Cannot send audio to OpenAI. State:', dcRef.current?.readyState);
+              }
             }
           };
           
