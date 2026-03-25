@@ -7,6 +7,7 @@ import { TranslationPanel } from "@/components/TranslationPanel";
 import { RecordingStatus } from "@/components/RecordingStatus";
 import { DownloadPanel } from "@/components/DownloadPanel";
 
+// NeuralEcho Translation Interface
 const Index = () => {
   const t = useAppState();
   const [showModeSelect, setShowModeSelect] = useState(false);
