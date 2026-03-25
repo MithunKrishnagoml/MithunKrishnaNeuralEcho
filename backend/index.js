@@ -20,15 +20,22 @@ const wss = new WebSocketServer({ server });
 
 // Middleware
 app.use(cors({
-  origin: [
-    'http://localhost:3000',
-    'http://localhost:5173',
-    'https://neuralecho.vercel.app',
-    'https://neuralecho1.vercel.app',
-    'https://neuralecho1-pe9i87uag-smithun2004-9533s-projects.vercel.app',
-    'https://neural-echo.vercel.app',
-    'https://*.vercel.app'
-  ],
+  origin: function (origin, callback) {
+    const allowedOrigins = [
+      'http://localhost:3000',
+      'http://localhost:5173',
+      'https://neuralecho.vercel.app',
+      'https://neuralecho1.vercel.app',
+      'https://neural-echo.vercel.app'
+    ];
+    
+    // Allow all Vercel preview deployments
+    if (!origin || allowedOrigins.includes(origin) || origin.endsWith('.vercel.app')) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
