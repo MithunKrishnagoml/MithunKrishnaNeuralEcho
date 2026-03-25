@@ -396,12 +396,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setActiveSpeakerId(id);
     // Update ref immediately so reinit uses new value
     activeSpeakerIdRef.current = id;
-    // Only reinit if a session has been started (not disconnected)
-    if (sessionState !== "disconnected") {
-      console.log('[Translation Setup] Reinitializing session after speaker switch');
-      reinitSession();
-    }
-  }, [sessionState, reinitSession]);
+    
+    // 🔥 CRITICAL FIX: Don't reinitialize session on speaker switch
+    // The session can handle speaker changes without reconnecting
+    // Reinitializing breaks the WebRTC connection and data channel
+    console.log('⚠️ [Translation Setup] Speaker switched but NOT reinitializing to preserve connection');
+  }, []);
 
   const updateSpeakerCount = useCallback((count: number) => {
     setSpeakerCount(count);
@@ -413,15 +413,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
     console.log('[Translation Setup] Updating speaker language:', speakerId, 'to', lang);
     setSpeakers((prev) => prev.map((s) => (s.id === speakerId ? { ...s, language: lang } : s)));
     
-    // Only reinitialize if session is already active to avoid multiple reinits
-    // Use a longer delay to batch multiple language updates
-    if (sessionState === "ready" || sessionState === "connecting") {
-      setTimeout(() => {
-        console.log('[Translation Setup] Reinitializing session after speaker language update');
-        reinitSession();
-      }, 300); // Increased delay to batch updates
-    }
-  }, [reinitSession, sessionState]);
+    // 🔥 CRITICAL FIX: Don't reinitialize session on language update
+    // The session can handle language changes without reconnecting
+    // Reinitializing breaks the WebRTC connection and data channel
+    // If language change is needed, it should be done via session.update message, not full reinit
+    console.log('⚠️ [Translation Setup] Language updated but NOT reinitializing to preserve connection');
+  }, []);
 
   const updateSpeakerViewLanguage = useCallback((speakerId: number, lang: LanguageCode) => {
     setSpeakers((prev) => prev.map((s) => (s.id === speakerId ? { ...s, viewLanguage: lang } : s)));
