@@ -10,6 +10,9 @@ class AudioTapProcessor extends AudioWorkletProcessor {
     this.currentResponseId = null;
     this.sequenceNumber = 0;
     this.chunkSize = 1024; // Samples per chunk (about 43ms at 24kHz)
+    this.processCallCount = 0; // Track how many times process() is called
+    
+    console.log('[AudioTapProcessor] Constructor called - worklet initialized');
     
     // Listen for messages from main thread
     this.port.onmessage = (event) => {
@@ -20,18 +23,24 @@ class AudioTapProcessor extends AudioWorkletProcessor {
           this.isCapturing = true;
           this.currentResponseId = responseId;
           this.sequenceNumber = 0;
-          console.log('[AudioTapProcessor] Started capturing for response:', responseId);
+          console.log('[AudioTapProcessor] ✅ Started capturing for response:', responseId);
           break;
           
         case 'STOP_CAPTURE':
           this.isCapturing = false;
-          console.log('[AudioTapProcessor] Stopped capturing');
+          console.log('[AudioTapProcessor] ⏹️ Stopped capturing. Total chunks sent:', this.sequenceNumber);
           break;
       }
     };
   }
   
   process(inputs, outputs, parameters) {
+    // Log first few process calls to confirm worklet is running
+    if (this.processCallCount < 5) {
+      console.log(`[AudioTapProcessor] process() call #${this.processCallCount}, isCapturing: ${this.isCapturing}`);
+    }
+    this.processCallCount++;
+    
     if (!this.isCapturing || !this.currentResponseId) {
       return true;
     }

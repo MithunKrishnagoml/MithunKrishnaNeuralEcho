@@ -48,6 +48,12 @@ export class RealtimeAudioTap {
 
       // Connect source to worklet (worklet doesn't connect to destination - no playback)
       source.connect(this.workletNode);
+      
+      // CRITICAL: Connect worklet to destination to ensure audio graph processes
+      // Even though we don't want playback, the graph needs to be connected for processing
+      this.workletNode.connect(this.audioContext.destination);
+      
+      console.log('🎤 [RealtimeAudioTap] Audio graph connected: source → worklet → destination');
 
       // Listen for PCM chunks from worklet
       this.workletNode.port.onmessage = (event) => {
@@ -55,8 +61,8 @@ export class RealtimeAudioTap {
         
         if (type === 'PCM_CHUNK' && this.isCapturing && this.onAudioChunk) {
           // Log every 50th chunk to monitor audio flow
-          if (sequenceNumber % 50 === 0) {
-            console.log(`🎵 [RealtimeAudioTap] Chunk #${sequenceNumber}: hasAudio=${hasAudio}, maxAmp=${maxAmplitude?.toFixed(4)}`);
+          if (this.sequenceNumber % 50 === 0) {
+            console.log(`🎵 [RealtimeAudioTap] Chunk #${this.sequenceNumber}: hasAudio=${hasAudio}, maxAmp=${maxAmplitude?.toFixed(4)}`);
           }
           
           // Convert raw ArrayBuffer to base64 in main thread (btoa available here)
@@ -67,7 +73,9 @@ export class RealtimeAudioTap {
           }
           const base64Data = btoa(binaryString);
           
-          this.onAudioChunk(base64Data, responseId, sequenceNumber);
+          // Send with incremented sequence number
+          this.onAudioChunk(base64Data, this.currentResponseId || responseId, this.sequenceNumber);
+          this.sequenceNumber++; // Increment after sending
         }
       };
 
