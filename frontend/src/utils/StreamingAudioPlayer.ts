@@ -282,8 +282,10 @@ export class StreamingAudioPlayer {
 
       // Check if this is PCM data (from real-time streaming) or WebM blob (fallback)
       if (chunk.data.length < 1000 && chunk.sequenceNumber !== undefined) {
-        // This is PCM data - buffer it by responseId instead of playing immediately
-        console.log('[StreamingAudioPlayer] Buffering PCM chunk:', chunk.id, 'for response:', chunk.responseId);
+        // This is PCM data - PLAY IMMEDIATELY for real-time streaming
+        if (this.options.debug) {
+          console.log('[StreamingAudioPlayer] Processing real-time PCM chunk:', chunk.id, 'seq:', chunk.sequenceNumber);
+        }
         
         // Decode base64 to Int16 PCM
         const binaryString = atob(chunk.data);
@@ -295,16 +297,22 @@ export class StreamingAudioPlayer {
         // Create Int16Array from bytes (little-endian)
         const int16Array = new Int16Array(bytes.buffer, bytes.byteOffset, bytes.length / 2);
         
-        // Buffer this chunk
-        if (!this.pcmChunkBuffer.has(chunk.responseId)) {
-          this.pcmChunkBuffer.set(chunk.responseId, []);
-          this.responseIdQueue.push(chunk.responseId);
+        // Convert Int16 PCM to Float32 samples
+        const float32Samples = new Float32Array(int16Array.length);
+        for (let i = 0; i < int16Array.length; i++) {
+          const sample = int16Array[i];
+          float32Samples[i] = sample < 0 ? sample / 32768.0 : sample / 32767.0;
         }
-        this.pcmChunkBuffer.get(chunk.responseId)!.push(int16Array);
         
-        // If this is marked as complete, play it now
-        if (chunk.isComplete) {
-          await this.playBufferedPCMResponse(chunk.responseId);
+        // Send samples to worklet IMMEDIATELY for real-time playback
+        this.workletNode.port.postMessage({
+          type: 'ADD_SAMPLES',
+          data: float32Samples,
+          responseId: chunk.responseId
+        });
+        
+        if (this.options.debug) {
+          console.log('[StreamingAudioPlayer] Sent', float32Samples.length, 'samples to worklet (real-time)');
         }
         return;
         
