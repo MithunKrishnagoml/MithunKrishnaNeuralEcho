@@ -69,7 +69,10 @@ class TranslationSession {
       joinedAt: Date.now(),
       totalProcessingTime: 0,
       requestCount: 0,
-      pendingMessage: null // For tracking translation in progress
+      pendingMessage: null, // For tracking translation in progress
+      audioSequenceNumber: 0, // Track audio chunk sequence
+      currentResponseId: null, // Track current OpenAI response
+      isStreaming: false // Track if currently streaming translation
     });
     console.log(`Added participant ${userId} with language ${language} to session ${this.sessionId}`);
   }
@@ -1044,9 +1047,9 @@ async function initializeOpenAIConnection(userId, translationSession) {
           },
           turn_detection: {
             type: 'server_vad',
-            threshold: 0.45,                     // increased for better detection
-            silence_duration_ms: 150,            // was 300 — fires translation faster
-            prefix_padding_ms: 100               // was 200 — less pre-roll
+            threshold: 0.3,                      // Keep at 0.3 for good balance
+            silence_duration_ms: 200,            // Reduced from 300 → 200 for faster response
+            prefix_padding_ms: 100               // Reduced from 200 → 100 for less pre-roll
           },
           temperature: 0.3,                      // low = more deterministic, faster
           max_response_output_tokens: 200,       // cap prevents runaway generation
