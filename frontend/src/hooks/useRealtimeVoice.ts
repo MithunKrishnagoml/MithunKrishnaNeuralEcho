@@ -98,6 +98,7 @@ export function useRealtimeVoice() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
+  const micWorkletNodeRef = useRef<AudioWorkletNode | null>(null); // For capturing mic input
   const dataArrayRef = useRef<Uint8Array | null>(null);
   const animationFrameRef = useRef<number | null>(null);
   const [isConnected, setIsConnected] = useState(false);
@@ -610,6 +611,43 @@ export function useRealtimeVoice() {
         analyserRef.current = analyser;
         dataArrayRef.current = new Uint8Array(analyser.frequencyBinCount);
         
+        // 4b. Set up AudioWorklet for capturing mic input and sending to OpenAI
+        try {
+          await audioContext.audioWorklet.addModule('/mic-input-processor.js');
+          const micWorkletNode = new AudioWorkletNode(audioContext, 'mic-input-processor');
+          
+          // Connect microphone to worklet for audio capture
+          microphone.connect(micWorkletNode);
+          
+          // Handle audio data from worklet
+          micWorkletNode.port.onmessage = (event) => {
+            const { type, data } = event.data;
+            
+            if (type === 'AUDIO_DATA' && dcRef.current?.readyState === 'open') {
+              // Convert Int16Array buffer to base64
+              const int16Array = new Int16Array(data);
+              const uint8Array = new Uint8Array(int16Array.buffer);
+              let binaryString = '';
+              for (let i = 0; i < uint8Array.length; i++) {
+                binaryString += String.fromCharCode(uint8Array[i]);
+              }
+              const base64Audio = btoa(binaryString);
+              
+              // Send to OpenAI via data channel
+              dcRef.current.send(JSON.stringify({
+                type: 'input_audio_buffer.append',
+                audio: base64Audio
+              }));
+            }
+          };
+          
+          micWorkletNodeRef.current = micWorkletNode;
+          console.log('🎤 [MicWorklet] Initialized for capturing mic input');
+        } catch (workletError) {
+          console.error('❌ [MicWorklet] Failed to initialize:', workletError);
+          // Continue without worklet - fallback to WebRTC audio track only
+        }
+        
         // Store threshold from config
         if (config.dbThreshold !== undefined) {
           dbThresholdRef.current = config.dbThreshold;
@@ -791,6 +829,17 @@ export function useRealtimeVoice() {
       recordingTimeoutRef.current = null;
     }
     
+    // Cleanup mic worklet node
+    if (micWorkletNodeRef.current) {
+      try {
+        micWorkletNodeRef.current.port.postMessage({ type: 'STOP_CAPTURE' });
+        micWorkletNodeRef.current.disconnect();
+      } catch (e) {
+        console.error('Error cleaning up mic worklet:', e);
+      }
+      micWorkletNodeRef.current = null;
+    }
+    
     // Cleanup real-time audio tap
     if (audioTapRef.current) {
       audioTapRef.current.dispose();
@@ -925,6 +974,7 @@ export function useRealtimeVoice() {
   }, []);
 
   /** Enable mic audio track (unmute) */
+  /** Enable mic audio track (unmute) */
   const enableMic = useCallback(() => {
     console.log('🎤 [enableMic] Starting - enabling microphone');
     
@@ -970,6 +1020,14 @@ export function useRealtimeVoice() {
       t.enabled = true;
     });
     
+    // Start AudioWorklet capture
+    if (micWorkletNodeRef.current) {
+      console.log('🎤 [enableMic] Starting AudioWorklet capture');
+      micWorkletNodeRef.current.port.postMessage({ type: 'START_CAPTURE' });
+    } else {
+      console.warn('⚠️ [enableMic] No AudioWorklet available for mic capture');
+    }
+    
     // Verify tracks are enabled after a short delay
     setTimeout(() => {
       const verifyTracks = streamRef.current?.getTracks() || [];
@@ -989,8 +1047,28 @@ export function useRealtimeVoice() {
 
   /** Disable mic audio track (mute) */
   const disableMic = useCallback(() => {
+    console.log('🎤 [disableMic] Stopping microphone');
+    
+    // Stop AudioWorklet capture
+    if (micWorkletNodeRef.current) {
+      console.log('🎤 [disableMic] Stopping AudioWorklet capture');
+      micWorkletNodeRef.current.port.postMessage({ type: 'STOP_CAPTURE' });
+    }
+    
+    // Send commit to tell OpenAI to process the audio
+    if (dcRef.current && dcRef.current.readyState === 'open') {
+      console.log('📤 [disableMic] Sending input_audio_buffer.commit');
+      try {
+        dcRef.current.send(JSON.stringify({ type: 'input_audio_buffer.commit' }));
+        console.log('✅ [disableMic] Commit sent - OpenAI will now process audio');
+      } catch (error) {
+        console.error('❌ [disableMic] Failed to send commit:', error);
+      }
+    }
+    
     streamRef.current?.getTracks().forEach((t) => (t.enabled = false));
     stopAudioMonitoring();
+    console.log('✅ [disableMic] Microphone disabled');
   }, [stopAudioMonitoring]);
 
   const stopSession = useCallback(() => {

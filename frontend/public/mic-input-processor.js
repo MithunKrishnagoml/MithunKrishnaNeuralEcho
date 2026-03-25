@@ -1,69 +1,59 @@
 /**
- * AudioWorklet processor for capturing microphone input
- * Converts Float32 PCM to Int16 and sends to main thread for OpenAI
+ * Microphone Input Processor
+ * Captures microphone audio and converts to PCM16 for OpenAI Realtime API
  */
+
 class MicInputProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
     this.isCapturing = false;
-    this.chunkSize = 2400; // 100ms at 24kHz
-    this.buffer = [];
     
     this.port.onmessage = (event) => {
-      if (event.data.type === 'START_CAPTURE') {
+      const { type } = event.data;
+      
+      if (type === 'START_CAPTURE') {
         this.isCapturing = true;
-        this.buffer = [];
         console.log('[MicInputProcessor] Started capturing');
-      } else if (event.data.type === 'STOP_CAPTURE') {
+      } else if (type === 'STOP_CAPTURE') {
         this.isCapturing = false;
-        this.buffer = [];
         console.log('[MicInputProcessor] Stopped capturing');
       }
     };
   }
-  
+
+  /**
+   * Convert Float32 audio samples to Int16 PCM
+   */
+  float32ToInt16(float32Array) {
+    const int16Array = new Int16Array(float32Array.length);
+    for (let i = 0; i < float32Array.length; i++) {
+      // Clamp to [-1, 1] range
+      const clamped = Math.max(-1, Math.min(1, float32Array[i]));
+      // Convert to 16-bit integer
+      int16Array[i] = clamped < 0 ? clamped * 0x8000 : clamped * 0x7FFF;
+    }
+    return int16Array;
+  }
+
   process(inputs, outputs, parameters) {
-    if (!this.isCapturing) {
-      return true;
-    }
-    
     const input = inputs[0];
-    if (!input || input.length === 0 || !input[0]) {
+    
+    // Only process if we have input and are capturing
+    if (!this.isCapturing || !input || !input[0] || input[0].length === 0) {
       return true;
     }
+
+    const inputChannel = input[0]; // Mono channel
     
-    const inputChannel = input[0];
-    const frameCount = inputChannel.length;
+    // Convert Float32 to Int16 PCM
+    const pcm16 = this.float32ToInt16(inputChannel);
     
-    if (frameCount === 0) {
-      return true;
-    }
-    
-    // Add frames to buffer
-    for (let i = 0; i < frameCount; i++) {
-      this.buffer.push(inputChannel[i]);
-    }
-    
-    // Send chunks when buffer is full
-    while (this.buffer.length >= this.chunkSize) {
-      const chunk = this.buffer.splice(0, this.chunkSize);
-      
-      // Convert Float32 to Int16 PCM
-      const int16Array = new Int16Array(chunk.length);
-      for (let i = 0; i < chunk.length; i++) {
-        const sample = Math.max(-1, Math.min(1, chunk[i]));
-        int16Array[i] = Math.round(sample * 32767);
-      }
-      
-      // Send to main thread
-      this.port.postMessage({
-        type: 'AUDIO_CHUNK',
-        data: int16Array.buffer,
-        sampleCount: chunk.length,
-        timestamp: currentTime
-      }, [int16Array.buffer]);
-    }
-    
+    // Send PCM data to main thread
+    this.port.postMessage({
+      type: 'AUDIO_DATA',
+      data: pcm16.buffer
+    }, [pcm16.buffer]); // Transfer ownership for efficiency
+
     return true;
   }
 }
