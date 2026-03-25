@@ -435,42 +435,58 @@ function relayStreamingMessage(data, senderWs) {
   const translationSession = translationSessions.get(sessionId);
   if (!translationSession) return;
 
-  // Transform RELAY_AUDIO_CHUNK to AUDIO_CHUNK for receiving client
-  let payload = { ...data };
+  // Handle RELAY_AUDIO_CHUNK - send to OpenAI for translation
   if (data.type === 'RELAY_AUDIO_CHUNK') {
-    payload = {
-      type: 'AUDIO_CHUNK',
-      participantId: data.fromParticipant || userId,
-      pcmData: data.chunk,
-      responseId: data.responseId,
-      sessionId: data.sessionId || sessionId,
-      timestamp: data.timestamp || Date.now(),
-    };
-    console.log(`🔄 [RELAY] Converting RELAY_AUDIO_CHUNK to AUDIO_CHUNK, chunk size: ${data.chunk?.length || 0}`);
-  } else if (data.type === 'RELAY_AUDIO_END') {
-    payload = {
-      type: 'AUDIO_STREAM_END',
-      participantId: data.fromParticipant || userId,
-      responseId: data.responseId,
-      sessionId: data.sessionId || sessionId,
-      timestamp: data.timestamp || Date.now(),
-    };
-    console.log(`🔄 [RELAY] Converting RELAY_AUDIO_END to AUDIO_STREAM_END`);
-  } else {
-    payload = {
-      ...data,
-      participantId: data.participantId || userId,
-      sessionId: data.sessionId || sessionId,
-      timestamp: data.timestamp || Date.now(),
-    };
+    const participant = translationSession.participants.get(userId);
+    if (participant?.openaiWs && participant.openaiWs.readyState === WebSocket.OPEN) {
+      // Send audio chunk to OpenAI for translation
+      const audioMessage = {
+        type: 'input_audio_buffer.append',
+        audio: data.chunk  // base64 PCM16 audio
+      };
+      participant.openaiWs.send(JSON.stringify(audioMessage));
+      console.log(`🎤 [AUDIO TO OPENAI] Sent audio chunk from ${userId} to OpenAI for translation (${data.chunk?.length || 0} bytes)`);
+    } else {
+      console.warn(`⚠️ [AUDIO TO OPENAI] OpenAI connection not ready for user ${userId}`);
+    }
+    return;
   }
+
+  // Handle RELAY_AUDIO_END - commit audio buffer to OpenAI
+  if (data.type === 'RELAY_AUDIO_END') {
+    const participant = translationSession.participants.get(userId);
+    if (participant?.openaiWs && participant.openaiWs.readyState === WebSocket.OPEN) {
+      // Commit the audio buffer to trigger translation
+      const commitMessage = {
+        type: 'input_audio_buffer.commit'
+      };
+      participant.openaiWs.send(JSON.stringify(commitMessage));
+      
+      // Request response generation
+      const responseMessage = {
+        type: 'response.create',
+        response: {
+          modalities: ['text', 'audio'],
+          instructions: 'Translate the input audio to the target language.'
+        }
+      };
+      participant.openaiWs.send(JSON.stringify(responseMessage));
+      console.log(`✅ [AUDIO TO OPENAI] Committed audio buffer and requested translation for user ${userId}`);
+    }
+    return;
+  }
+
+  // For other streaming messages, relay as before
+  let payload = {
+    ...data,
+    participantId: data.participantId || userId,
+    sessionId: data.sessionId || sessionId,
+    timestamp: data.timestamp || Date.now(),
+  };
 
   for (const participant of translationSession.participants.values()) {
     if (participant.socket !== senderWs && participant.socket?.readyState === WebSocket.OPEN) {
       participant.socket.send(JSON.stringify(payload));
-      if (payload.type === 'AUDIO_CHUNK') {
-        console.log(`✅ [RELAY] Sent AUDIO_CHUNK to other participant`);
-      }
     }
   }
 }
@@ -515,6 +531,10 @@ wss.on('connection', (ws, req) => {
         activeConnections.set(ws, { sessionId, userId });
 
         console.log(`G�� Participant ${userId} joined session ${sessionId}. Total participants: ${translationSession.participants.size}`);
+
+        // Initialize OpenAI connection for this participant
+        await initializeOpenAIConnection(userId, translationSession);
+        console.log(`🔧 [OpenAI] Initialized connection for participant ${userId}`);
 
         // Notify successful join
         ws.send(JSON.stringify({ 
