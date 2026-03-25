@@ -284,11 +284,19 @@ export function useRealtimeVoice() {
       }
 
       if (event.type === "output_audio_buffer.started") {
+        console.log('🎵 ═══════════════════════════════════════════════════════');
+        console.log('🎵 [OUTPUT AUDIO] OpenAI started sending audio!');
+        console.log('🎵 [OUTPUT AUDIO] Response ID:', event.response_id);
+        console.log('🎵 [OUTPUT AUDIO] AudioTap ready:', !!audioTapRef.current);
+        console.log('🎵 ═══════════════════════════════════════════════════════');
+        
         // Start real-time capture at first emitted output audio
         if (audioTapRef.current) {
           const responseId = event.response_id || `response_${Date.now()}`;
           audioTapRef.current.startCapture(responseId);
           console.log('🎵 [RealtimeAudioTap] Started capture (output_audio_buffer.started)');
+        } else {
+          console.error('❌ [RealtimeAudioTap] Cannot start capture - audioTapRef is null!');
         }
         
         // Keep MediaRecorder as fallback
@@ -474,7 +482,14 @@ export function useRealtimeVoice() {
                     
                     // RELAY TO BACKEND: Send AI audio chunk to all participants
                     if (callbacksRef.current?.onAIAudioChunk) {
+                      if (sequenceNumber % 50 === 0) {
+                        console.log(`🔊 [RELAY] Sending AI audio chunk #${sequenceNumber} to backend (${pcmData.length} bytes)`);
+                      }
                       callbacksRef.current.onAIAudioChunk(pcmData, sequenceNumber);
+                    } else {
+                      if (sequenceNumber === 0) {
+                        console.error('❌ [RELAY] onAIAudioChunk callback not registered!');
+                      }
                     }
                   },
                   // onStreamEnd callback
