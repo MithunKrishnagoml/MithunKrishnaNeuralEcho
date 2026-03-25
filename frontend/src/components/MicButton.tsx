@@ -1,4 +1,4 @@
-import { Mic, MicOff } from "lucide-react";
+import { Mic, MicOff, Hand, Zap } from "lucide-react";
 import { AppStatus } from "@/lib/constants";
 import { VoiceMode } from "@/hooks/useRealtimeVoice";
 
@@ -10,6 +10,8 @@ interface MicButtonProps {
   disabled?: boolean;
   audioLevel?: number | null;
   dbThreshold?: number;
+  onToggleMode?: () => void;
+  showModeToggle?: boolean;
 }
 
 export function MicButton({ 
@@ -19,7 +21,9 @@ export function MicButton({
   onRelease, 
   disabled = false, 
   audioLevel = null,
-  dbThreshold = -50
+  dbThreshold = -50,
+  onToggleMode,
+  showModeToggle = false
 }: MicButtonProps) {
   const isActive = status === "listening";
   const isTranslating = status === "translating";
@@ -45,7 +49,7 @@ export function MicButton({
   };
 
   return (
-    <div className="relative flex items-center justify-center">
+    <div className="relative flex flex-col items-center justify-center gap-3">
       {/* Pulse rings when active */}
       {isActive && (
         <>
@@ -135,6 +139,28 @@ export function MicButton({
         <div className="absolute -bottom-8 left-1/2 transform -translate-x-1/2 text-xs text-muted-foreground font-mono">
           {Math.round(audioLevel)}dB
         </div>
+      )}
+      
+      {/* Mode Toggle Button */}
+      {showModeToggle && onToggleMode && (
+        <button
+          onClick={onToggleMode}
+          disabled={disabled}
+          className="flex items-center gap-2 px-4 py-2 rounded-lg bg-secondary hover:bg-muted transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          aria-label={`Switch to ${isHandsFree ? 'push-to-talk' : 'hands-free'} mode`}
+        >
+          {isHandsFree ? (
+            <>
+              <Hand className="w-4 h-4 text-muted-foreground" />
+              <span className="text-sm text-muted-foreground">Switch to Push-to-Talk</span>
+            </>
+          ) : (
+            <>
+              <Zap className="w-4 h-4 text-primary" />
+              <span className="text-sm text-foreground">Switch to Hands-Free</span>
+            </>
+          )}
+        </button>
       )}
     </div>
   );

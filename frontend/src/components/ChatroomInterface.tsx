@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -16,7 +16,9 @@ import {
   Share2,
   Waves,
   FileText,
-  Download
+  Download,
+  Hand,
+  Zap
 } from 'lucide-react';
 import { ChatroomParticipant, ChatroomMessage } from '@/types/chatroom';
 import { useAppState } from '@/contexts/AppContext';
@@ -24,6 +26,7 @@ import { useChatroomConnection } from '@/hooks/useChatroomConnection';
 import { useRoomTranslation } from '@/hooks/useRoomTranslation';
 import { useStreamingState } from '@/hooks/useStreamingState';
 import { useTranscriptRecording } from '@/hooks/useTranscriptRecording';
+import { useVoiceActivityDetection } from '@/hooks/useVoiceActivityDetection';
 import { TranscriptDisplay } from '@/components/TranscriptDisplay';
 import { RecordingControls } from '@/components/RecordingControls';
 import { StreamingTranscript } from '@/components/StreamingTranscript';
@@ -52,6 +55,8 @@ export function ChatroomInterface({ roomId, participant, onLeaveRoom }: Chatroom
   const [currentTranscript, setCurrentTranscript] = useState('');
   const [incomingTranscript, setIncomingTranscript] = useState(''); // Translated transcript from other speaker
   const [isOtherSpeaking, setIsOtherSpeaking] = useState(false); // Is other person speaking?
+  const [isHandsFreeMode, setIsHandsFreeMode] = useState(false); // Hands-free mode toggle
+  const isPlayingAudioRef = useRef(false); // Track if we're playing incoming audio
 
   const {
     streamingState,
@@ -291,6 +296,86 @@ export function ChatroomInterface({ roomId, participant, onLeaveRoom }: Chatroom
   const { currentDbLevel, dbThreshold } = useAppState();
   const audioLevel = currentDbLevel || -100;
   const isVoiceRecording = isListening || isTranslating;
+
+  // Voice Activity Detection for hands-free mode
+  const vad = useVoiceActivityDetection(
+    {
+      energyThreshold: 0.015,
+      silenceTimeout: 1500, // 1.5 seconds for mid-sentence pauses
+      minSpeechDuration: 300, // 300ms minimum to avoid noise
+      debug: true,
+    },
+    {
+      onSpeechStart: () => {
+        console.log('🎤 [VAD] Speech started');
+        if (isHandsFreeMode && !isPlayingAudioRef.current && isVoiceReady && otherParticipant) {
+          console.log('🎤 [VAD] Starting room listening (hands-free)');
+          startRoomListening();
+        }
+      },
+      onSpeechEnd: () => {
+        console.log('🎤 [VAD] Speech ended');
+        if (isHandsFreeMode && isListening) {
+          console.log('🎤 [VAD] Stopping room listening (hands-free)');
+          stopRoomListening();
+        }
+      },
+    }
+  );
+
+  // Toggle hands-free mode
+  const toggleHandsFreeMode = useCallback(() => {
+    const newMode = !isHandsFreeMode;
+    setIsHandsFreeMode(newMode);
+    
+    if (newMode) {
+      toast.success('Hands-free mode enabled', {
+        description: 'Speak naturally - your voice will be detected automatically',
+      });
+      // Start VAD
+      vad.start().catch((error) => {
+        console.error('Failed to start VAD:', error);
+        toast.error('Failed to start hands-free mode. Please check microphone permissions.');
+        setIsHandsFreeMode(false);
+      });
+    } else {
+      toast.info('Push-to-talk mode enabled', {
+        description: 'Hold the button or spacebar to speak',
+      });
+      // Stop VAD
+      vad.stop();
+      // Stop any active listening
+      if (isListening) {
+        stopRoomListening();
+      }
+    }
+  }, [isHandsFreeMode, vad, isListening, stopRoomListening]);
+
+  // Handle incoming audio playback - stop VAD temporarily to avoid echo
+  useEffect(() => {
+    if (streamingState.isOtherSpeaking || isOtherSpeaking) {
+      console.log('🔊 [Audio] Other person speaking, pausing VAD');
+      isPlayingAudioRef.current = true;
+      
+      // If we're currently speaking in hands-free mode, stop
+      if (isHandsFreeMode && isListening) {
+        console.log('🔊 [Audio] Interruption detected - stopping local speech');
+        stopRoomListening();
+      }
+    } else {
+      console.log('🔊 [Audio] Other person stopped speaking, resuming VAD');
+      isPlayingAudioRef.current = false;
+    }
+  }, [streamingState.isOtherSpeaking, isOtherSpeaking, isHandsFreeMode, isListening, stopRoomListening]);
+
+  // Cleanup VAD on unmount or when leaving hands-free mode
+  useEffect(() => {
+    return () => {
+      if (vad.isActive) {
+        vad.stop();
+      }
+    };
+  }, []);
 
   const displayMessages = useMemo(() => {
     const combined: DisplayMessage[] = [];
@@ -570,14 +655,16 @@ export function ChatroomInterface({ roomId, participant, onLeaveRoom }: Chatroom
     };
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.code === 'Space' && !isPressing && !isVoiceRecording) {
+      // Only handle spacebar in push-to-talk mode
+      if (e.code === 'Space' && !isPressing && !isVoiceRecording && !isHandsFreeMode) {
         e.preventDefault();
         handleMicPress();
       }
     };
 
     const handleKeyUp = (e: KeyboardEvent) => {
-      if (e.code === 'Space' && isPressing) {
+      // Only handle spacebar in push-to-talk mode
+      if (e.code === 'Space' && isPressing && !isHandsFreeMode) {
         e.preventDefault();
         handleMicRelease();
       }
@@ -588,9 +675,11 @@ export function ChatroomInterface({ roomId, participant, onLeaveRoom }: Chatroom
       document.addEventListener('touchend', handleMouseUpGlobal);
     }
 
-    // Always listen for spacebar
-    document.addEventListener('keydown', handleKeyDown);
-    document.addEventListener('keyup', handleKeyUp);
+    // Always listen for spacebar (but only in push-to-talk mode)
+    if (!isHandsFreeMode) {
+      document.addEventListener('keydown', handleKeyDown);
+      document.addEventListener('keyup', handleKeyUp);
+    }
 
     return () => {
       document.removeEventListener('mouseup', handleMouseUpGlobal);
@@ -598,7 +687,7 @@ export function ChatroomInterface({ roomId, participant, onLeaveRoom }: Chatroom
       document.removeEventListener('keydown', handleKeyDown);
       document.removeEventListener('keyup', handleKeyUp);
     };
-  }, [isPressing, isVoiceRecording, handleMicPress, handleMicRelease]);
+  }, [isPressing, isVoiceRecording, isHandsFreeMode, handleMicPress, handleMicRelease]);
 
   const handleMuteToggle = useCallback(() => {
     setIsMuted(!isMuted);
@@ -886,12 +975,47 @@ export function ChatroomInterface({ roomId, participant, onLeaveRoom }: Chatroom
         {/* Bottom Control Bar */}
         <div className="border-t border-border/50 p-4 bg-secondary/30">
           <div className="max-w-4xl mx-auto space-y-3">
+            {/* Mode Toggle */}
+            {otherParticipant && isVoiceReady && (
+              <div className="flex items-center justify-center gap-2">
+                <button
+                  onClick={toggleHandsFreeMode}
+                  disabled={!isVoiceReady || !isConnected || !otherParticipant}
+                  className={`mode-toggle-button flex items-center gap-2 px-4 py-2 rounded-lg border transition-all text-sm font-medium ${
+                    isHandsFreeMode
+                      ? 'border-primary bg-primary/10 text-primary hover:bg-primary/20 vad-active'
+                      : 'border-border bg-secondary hover:bg-muted text-muted-foreground'
+                  } disabled:opacity-50 disabled:cursor-not-allowed`}
+                >
+                  {isHandsFreeMode ? (
+                    <>
+                      <Zap className="w-4 h-4" />
+                      <span>Hands-Free Mode</span>
+                      {vad.isSpeaking && <span className="w-2 h-2 rounded-full bg-primary animate-pulse vad-speaking-indicator" />}
+                    </>
+                  ) : (
+                    <>
+                      <Hand className="w-4 h-4" />
+                      <span>Push-to-Talk Mode</span>
+                    </>
+                  )}
+                </button>
+                {isHandsFreeMode && vad.isActive && (
+                  <div className="text-xs text-muted-foreground flex items-center gap-1">
+                    <div className="w-2 h-2 rounded-full bg-green-500 vad-listening-indicator" />
+                    <span>Listening...</span>
+                  </div>
+                )}
+              </div>
+            )}
+            
             {/* Voice Level (only when speaking) */}
-            {isListening && (
+            {(isListening || (isHandsFreeMode && vad.isSpeaking)) && (
               <div className="space-y-1">
                 <div className="flex items-center gap-2 text-xs text-muted-foreground">
                   <Waves className="w-3 h-3" />
                   <span>Voice Level</span>
+                  {isHandsFreeMode && <span className="text-primary">(Hands-Free)</span>}
                 </div>
                 <div className="w-full bg-secondary rounded-full h-1.5 overflow-hidden">
                   <div 
@@ -902,56 +1026,93 @@ export function ChatroomInterface({ roomId, participant, onLeaveRoom }: Chatroom
               </div>
             )}
 
-            {/* Press-to-Talk Mic Control */}
-            <div className="flex items-center gap-2">
-              <button
-                onMouseDown={handleMouseDown}
-                onMouseUp={handleMouseUp}
-                onTouchStart={handleTouchStart}
-                onTouchEnd={handleTouchEnd}
-                disabled={!isVoiceReady || !isConnected || !otherParticipant}
-                className={`press-to-talk-button flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-lg border transition-all text-sm font-medium ${
-                  isPressing || isListening
-                    ? 'border-primary/40 bg-primary text-primary-foreground press-to-talk-active mic-recording'
-                    : 'border-border bg-secondary hover:bg-muted text-foreground disabled:opacity-50 disabled:cursor-not-allowed hover:scale-[1.02] active:scale-95'
-                }`}
-              >
-                {isPressing || isListening ? (
-                  <>
-                    <Mic className="w-4 h-4 animate-pulse" />
-                    <span className="flex items-center gap-1">
-                      Speaking...
-                      {pressStartTime && (
-                        <span className="text-xs opacity-75">
-                          ({Math.floor((Date.now() - pressStartTime) / 1000)}s)
-                        </span>
-                      )}
-                    </span>
-                  </>
-                ) : (
-                  <>
-                    <MicOff className="w-4 h-4" />
-                    <span>
-                      {!otherParticipant 
-                        ? 'Waiting for participant...' 
-                        : 'Hold to Speak'
-                      }
-                    </span>
-                  </>
-                )}
-              </button>
-              <button
-                onClick={handleMuteToggle}
-                className="p-3 rounded-lg border border-border bg-secondary hover:bg-muted transition-colors"
-                title={isMuted ? "Unmute incoming audio" : "Mute incoming audio"}
-              >
-                {isMuted ? (
-                  <VolumeX className="w-4 h-4 text-muted-foreground" />
-                ) : (
-                  <Volume2 className="w-4 h-4 text-muted-foreground" />
-                )}
-              </button>
-            </div>
+            {/* Press-to-Talk Mic Control (only in push-to-talk mode) */}
+            {!isHandsFreeMode && (
+              <div className="flex items-center gap-2">
+                <button
+                  onMouseDown={handleMouseDown}
+                  onMouseUp={handleMouseUp}
+                  onTouchStart={handleTouchStart}
+                  onTouchEnd={handleTouchEnd}
+                  disabled={!isVoiceReady || !isConnected || !otherParticipant}
+                  className={`press-to-talk-button flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-lg border transition-all text-sm font-medium ${
+                    isPressing || isListening
+                      ? 'border-primary/40 bg-primary text-primary-foreground press-to-talk-active mic-recording'
+                      : 'border-border bg-secondary hover:bg-muted text-foreground disabled:opacity-50 disabled:cursor-not-allowed hover:scale-[1.02] active:scale-95'
+                  }`}
+                >
+                  {isPressing || isListening ? (
+                    <>
+                      <Mic className="w-4 h-4 animate-pulse" />
+                      <span className="flex items-center gap-1">
+                        Speaking...
+                        {pressStartTime && (
+                          <span className="text-xs opacity-75">
+                            ({Math.floor((Date.now() - pressStartTime) / 1000)}s)
+                          </span>
+                        )}
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <MicOff className="w-4 h-4" />
+                      <span>
+                        {!otherParticipant 
+                          ? 'Waiting for participant...' 
+                          : 'Hold to Speak'
+                        }
+                      </span>
+                    </>
+                  )}
+                </button>
+                <button
+                  onClick={handleMuteToggle}
+                  className="p-3 rounded-lg border border-border bg-secondary hover:bg-muted transition-colors"
+                  title={isMuted ? "Unmute incoming audio" : "Mute incoming audio"}
+                >
+                  {isMuted ? (
+                    <VolumeX className="w-4 h-4 text-muted-foreground" />
+                  ) : (
+                    <Volume2 className="w-4 h-4 text-muted-foreground" />
+                  )}
+                </button>
+              </div>
+            )}
+            
+            {/* Hands-Free Status Display */}
+            {isHandsFreeMode && (
+              <div className="flex items-center gap-2">
+                <div className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-lg border transition-all text-sm font-medium ${
+                  vad.isSpeaking || isListening
+                    ? 'border-primary/40 bg-primary text-primary-foreground'
+                    : 'border-border bg-secondary text-muted-foreground'
+                }`}>
+                  {vad.isSpeaking || isListening ? (
+                    <>
+                      <Mic className="w-4 h-4 animate-pulse" />
+                      <span>Speaking...</span>
+                      <div className="w-2 h-2 rounded-full bg-primary-foreground animate-pulse" />
+                    </>
+                  ) : (
+                    <>
+                      <Mic className="w-4 h-4" />
+                      <span>Ready - Speak naturally</span>
+                    </>
+                  )}
+                </div>
+                <button
+                  onClick={handleMuteToggle}
+                  className="p-3 rounded-lg border border-border bg-secondary hover:bg-muted transition-colors"
+                  title={isMuted ? "Unmute incoming audio" : "Mute incoming audio"}
+                >
+                  {isMuted ? (
+                    <VolumeX className="w-4 h-4 text-muted-foreground" />
+                  ) : (
+                    <Volume2 className="w-4 h-4 text-muted-foreground" />
+                  )}
+                </button>
+              </div>
+            )}
             
             {/* Audio Level Indicator */}
             {(isPressing || isListening) && audioLevel !== null && (
@@ -1001,24 +1162,43 @@ export function ChatroomInterface({ roomId, participant, onLeaveRoom }: Chatroom
         </div>
       </div>
 
-      {/* Press-to-Talk Instructions */}
+      {/* Mode Instructions */}
       {otherParticipant && isVoiceReady && (
         <div className="border-t border-border/50 bg-secondary/30 px-5 py-3 relative z-10">
           <div className="flex items-center justify-center gap-6 text-xs text-muted-foreground">
-            <div className="flex items-center gap-2">
-              <div className="w-6 h-6 rounded border border-border bg-background flex items-center justify-center">
-                <Mic className="w-3 h-3" />
-              </div>
-              <span>Hold button to speak</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <kbd className="px-2 py-1 text-xs font-mono bg-background border border-border rounded">Space</kbd>
-              <span>Press & hold spacebar</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <div className="w-2 h-2 rounded-full bg-primary animate-pulse"></div>
-              <span>Real-time translation active</span>
-            </div>
+            {isHandsFreeMode ? (
+              <>
+                <div className="flex items-center gap-2">
+                  <Zap className="w-4 h-4 text-primary" />
+                  <span className="text-primary font-medium">Hands-Free Active</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
+                  <span>Speak naturally - voice detected automatically</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Waves className="w-3 h-3" />
+                  <span>1.5s pause tolerance for natural speech</span>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="flex items-center gap-2">
+                  <div className="w-6 h-6 rounded border border-border bg-background flex items-center justify-center">
+                    <Mic className="w-3 h-3" />
+                  </div>
+                  <span>Hold button to speak</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <kbd className="px-2 py-1 text-xs font-mono bg-background border border-border rounded">Space</kbd>
+                  <span>Press & hold spacebar</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="w-2 h-2 rounded-full bg-primary animate-pulse"></div>
+                  <span>Real-time translation active</span>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}
