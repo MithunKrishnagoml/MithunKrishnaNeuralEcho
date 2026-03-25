@@ -605,7 +605,8 @@ export function ChatroomInterface({ roomId, participant, onLeaveRoom }: Chatroom
   }, [isMuted]);
 
   const copyShareableLink = useCallback(() => {
-    const shareableLink = `${window.location.origin}/join/${roomId}`;
+    const baseUrl = import.meta.env.VITE_APP_URL || window.location.origin;
+    const shareableLink = `${baseUrl}/join/${roomId}`;
     navigator.clipboard.writeText(shareableLink);
     toast.success("Shareable link copied to clipboard!", {
       description: "Send this link to someone to join your translation room"
