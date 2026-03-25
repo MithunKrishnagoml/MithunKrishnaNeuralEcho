@@ -32,6 +32,12 @@ class AudioStreamingProcessor extends AudioWorkletProcessor {
         case 'ADD_SAMPLES':
           // Receive Float32Array samples from main thread
           if (data && data.length > 0) {
+            // Skip keep-alive samples - they're just to keep AudioContext alive
+            if (isKeepAlive) {
+              // Don't add to queue, just acknowledge receipt
+              break;
+            }
+            
             // Track response ID changes
             if (responseId && responseId !== this.currentResponseId) {
               console.log(`[AudioWorklet] New response detected: ${responseId} (was: ${this.currentResponseId})`);
