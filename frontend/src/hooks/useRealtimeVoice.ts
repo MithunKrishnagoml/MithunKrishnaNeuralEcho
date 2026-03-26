@@ -194,12 +194,18 @@ export function useRealtimeVoice() {
             transcript: finalTranscript
           });
           
-          // Cancel the response that has already started
+          // Cancel the response only if one is actually active
           try {
             if (dcRef.current && dcRef.current.readyState === 'open') {
-              dcRef.current.send(JSON.stringify({ type: "response.cancel" }));
+              // ✅ Only cancel if response hasn't already finished
+              if (!turnResponseDoneRef.current) {
+                dcRef.current.send(JSON.stringify({ type: "response.cancel" }));
+                console.log('🧹 [SILENCE DETECTION] Canceled active response');
+              } else {
+                console.log('ℹ️ [SILENCE DETECTION] Response already done, skipping cancel');
+              }
               dcRef.current.send(JSON.stringify({ type: "input_audio_buffer.clear" }));
-              console.log('🧹 [SILENCE DETECTION] Canceled response and cleared buffer');
+              console.log('🧹 [SILENCE DETECTION] Cleared buffer');
             }
           } catch (error) {
             console.error('❌ [SILENCE DETECTION] Error canceling response:', error);
@@ -495,17 +501,21 @@ export function useRealtimeVoice() {
                       callbacksRef.current.onAudioChunk(pcmData, responseId);
                     }
                     
+                    // ❌ DISABLED: In 2-person rooms, AI audio should NOT be relayed through backend
+                    // Each participant hears their own AI directly via WebRTC
+                    // Backend relay would cause duplicate audio (once local, once relayed)
+                    // 
                     // RELAY TO BACKEND: Send AI audio chunk to all participants
-                    if (callbacksRef.current?.onAIAudioChunk) {
-                      if (sequenceNumber % 50 === 0) {
-                        console.log(`🔊 [RELAY] Sending AI audio chunk #${sequenceNumber} to backend (${pcmData.length} bytes)`);
-                      }
-                      callbacksRef.current.onAIAudioChunk(pcmData, sequenceNumber);
-                    } else {
-                      if (sequenceNumber === 0) {
-                        console.error('❌ [RELAY] onAIAudioChunk callback not registered!');
-                      }
-                    }
+                    // if (callbacksRef.current?.onAIAudioChunk) {
+                    //   if (sequenceNumber % 50 === 0) {
+                    //     console.log(`🔊 [RELAY] Sending AI audio chunk #${sequenceNumber} to backend (${pcmData.length} bytes)`);
+                    //   }
+                    //   callbacksRef.current.onAIAudioChunk(pcmData, sequenceNumber);
+                    // } else {
+                    //   if (sequenceNumber === 0) {
+                    //     console.error('❌ [RELAY] onAIAudioChunk callback not registered!');
+                    //   }
+                    // }
                   },
                   // onStreamEnd callback
                   (responseId: string) => {
@@ -1142,16 +1152,8 @@ export function useRealtimeVoice() {
       micWorkletNodeRef.current.port.postMessage({ type: 'STOP_CAPTURE' });
     }
     
-    // Send commit to tell OpenAI to process the audio
-    if (dcRef.current && dcRef.current.readyState === 'open') {
-      console.log('📤 [disableMic] Sending input_audio_buffer.commit');
-      try {
-        dcRef.current.send(JSON.stringify({ type: 'input_audio_buffer.commit' }));
-        console.log('✅ [disableMic] Commit sent - OpenAI will now process audio');
-      } catch (error) {
-        console.error('❌ [disableMic] Failed to send commit:', error);
-      }
-    }
+    // ❌ REMOVED: commitTurn() handles input_audio_buffer.commit
+    // Sending it here causes double-commit which corrupts the buffer
     
     streamRef.current?.getTracks().forEach((t) => (t.enabled = false));
     stopAudioMonitoring();
