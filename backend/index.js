@@ -787,32 +787,30 @@ wss.on('connection', (ws, req) => {
         const connection = activeConnections.get(ws);
         if (!connection) return;
 
-        const { sessionId } = connection;
+        const { sessionId, userId: senderUserId } = connection;
         const translationSession = translationSessions.get(sessionId);
         if (!translationSession) return;
 
-        // Broadcast as AUDIO_CHUNK (matches what frontend expects)
-        const chunkMessage = {
-          type: 'AUDIO_CHUNK',
-          sessionId: sessionId,
-          participantId: participantId,
-          pcmData: audioData,
-          sampleRate: 24000,
-          sequenceNumber: seq,
-          responseId: `ai_response_${Date.now()}`,
-          timestamp: Date.now()
-        };
-
-        let sentCount = 0;
-        for (const [userId, participant] of translationSession.participants.entries()) {
-          if (participant.socket && participant.socket.readyState === WebSocket.OPEN) {
-            participant.socket.send(JSON.stringify(chunkMessage));
-            sentCount++;
-          }
-        }
+        // Get the other participant (the one who should receive AI audio)
+        const otherParticipant = translationSession.getOtherParticipant(senderUserId);
         
-        if (sentCount > 0) {
-          console.log(`🤖 [AI_AUDIO_CHUNK] Broadcast as AUDIO_CHUNK to ${sentCount} participant(s)`);
+        if (otherParticipant?.socket?.readyState === WebSocket.OPEN) {
+          // Use "ai-agent" as participantId so frontend knows it's AI, not the sender
+          const chunkMessage = {
+            type: 'AUDIO_CHUNK',
+            sessionId: sessionId,
+            participantId: 'ai-agent',  // ✅ AI has its own ID
+            pcmData: audioData,
+            sampleRate: 24000,
+            sequenceNumber: seq,
+            responseId: `ai_response_${Date.now()}`,
+            timestamp: Date.now()
+          };
+
+          otherParticipant.socket.send(JSON.stringify(chunkMessage));
+          console.log(`🤖 [AI_AUDIO_CHUNK] Sent to other participant as AUDIO_CHUNK with participantId: ai-agent`);
+        } else {
+          console.log(`🤖 [AI_AUDIO_CHUNK] No other participant available to receive AI audio`);
         }
       }
 
@@ -824,29 +822,24 @@ wss.on('connection', (ws, req) => {
         const connection = activeConnections.get(ws);
         if (!connection) return;
 
-        const { sessionId } = connection;
+        const { sessionId, userId: senderUserId } = connection;
         const translationSession = translationSessions.get(sessionId);
         if (!translationSession) return;
 
-        // Broadcast stream end to all participants
-        const endMessage = {
-          type: 'AUDIO_STREAM_END',
-          sessionId: sessionId,
-          participantId: participantId,
-          responseId: `ai_response_${Date.now()}`,
-          timestamp: Date.now()
-        };
-
-        let sentCount = 0;
-        for (const [userId, participant] of translationSession.participants.entries()) {
-          if (participant.socket && participant.socket.readyState === WebSocket.OPEN) {
-            participant.socket.send(JSON.stringify(endMessage));
-            sentCount++;
-          }
-        }
+        // Send stream end to the other participant only
+        const otherParticipant = translationSession.getOtherParticipant(senderUserId);
         
-        if (sentCount > 0) {
-          console.log(`🏁 [AI_AUDIO_END] Broadcast as AUDIO_STREAM_END to ${sentCount} participant(s)`);
+        if (otherParticipant?.socket?.readyState === WebSocket.OPEN) {
+          const endMessage = {
+            type: 'AUDIO_STREAM_END',
+            sessionId: sessionId,
+            participantId: 'ai-agent',  // ✅ Match the AI participantId
+            responseId: `ai_response_${Date.now()}`,
+            timestamp: Date.now()
+          };
+
+          otherParticipant.socket.send(JSON.stringify(endMessage));
+          console.log(`🏁 [AI_AUDIO_END] Sent to other participant with participantId: ai-agent`);
         }
       }
 
@@ -926,7 +919,7 @@ wss.on('connection', (ws, req) => {
           const chunkMessage = {
             type: 'AUDIO_CHUNK',
             sessionId: sessionId,
-            fromParticipant: participantId,
+            participantId: participantId,  // ✅ Consistent field name
             pcmData: pcmData,
             sampleRate: sampleRate || 24000,
             sequenceNumber: sequenceNumber || 0,
@@ -936,6 +929,8 @@ wss.on('connection', (ws, req) => {
           
           otherParticipant.socket.send(JSON.stringify(chunkMessage));
           console.log(`🎵 [AUDIO_CHUNK] Relayed to other participant: seq ${sequenceNumber}`);
+        } else {
+          console.log(`🎵 [AUDIO_CHUNK] No other participant to relay to`);
         }
       }
 
