@@ -56,6 +56,12 @@ export interface SessionConfig {
   voice?: string;
   dbThreshold?: number; // dB threshold for voice detection (default: -50)
   language?: string; // Language hint for Whisper transcription (e.g., "en", "fr")
+  // VAD (Voice Activity Detection) configuration for AudioWorklet
+  vadConfig?: {
+    energyThreshold?: number; // RMS threshold for speech detection (default: 0.01)
+    silenceDurationMs?: number; // Silence duration before stopping (default: 600ms)
+    preBufferDurationMs?: number; // Pre-buffer duration to avoid cutting first words (default: 250ms)
+  };
 }
 
 export interface RealtimeStreamingCallbacks {
@@ -735,8 +741,17 @@ export function useRealtimeVoice() {
             }
           };
           
+          // Configure VAD if provided
+          if (config.vadConfig) {
+            console.log('🎤 [MicWorklet] Configuring VAD:', config.vadConfig);
+            micWorkletNode.port.postMessage({
+              type: 'UPDATE_CONFIG',
+              config: config.vadConfig
+            });
+          }
+          
           micWorkletNodeRef.current = micWorkletNode;
-          console.log('🎤 [MicWorklet] Initialized for capturing mic input');
+          console.log('🎤 [MicWorklet] Initialized for capturing mic input with VAD');
         } catch (workletError) {
           console.error('❌ [MicWorklet] Failed to initialize:', workletError);
           // Continue without worklet - fallback to WebRTC audio track only
