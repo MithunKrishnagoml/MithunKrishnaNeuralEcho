@@ -1226,7 +1226,73 @@ wss.on('connection', (ws, req) => {
         }
       }
 
-      // Handle incoming mic audio from frontend
+      // ✅ NEW: Handle streaming mic audio chunks (TRUE STREAMING - ~20ms chunks)
+      // This replaces the old MIC_AUDIO batching approach
+      if (data.type === 'MIC_AUDIO_CHUNK') {
+        const { audioData, timestamp } = data; // base64 PCM16 from mic (~20ms chunk)
+        const connection = activeConnections.get(ws);
+        if (!connection) return;
+
+        const { sessionId, userId } = connection;
+        const translationSession = translationSessions.get(sessionId);
+        if (!translationSession) return;
+
+        const participant = translationSession.participants.get(userId);
+        if (!participant?.openaiWs || participant.openaiWs.readyState !== WebSocket.OPEN) {
+          console.warn(`⚠️ [MIC_AUDIO_CHUNK] OpenAI session not ready for ${userId}`);
+          return;
+        }
+
+        // ✅ CRITICAL: Send immediately to OpenAI - no batching, no waiting
+        // This is the key to <500ms latency
+        participant.openaiWs.send(JSON.stringify({
+          type: 'input_audio_buffer.append',
+          audio: audioData
+        }));
+        
+        // Track last audio time for silence detection
+        participant.lastAudioTime = Date.now();
+      }
+
+      // ✅ NEW: Handle commit audio buffer signal (silence detected)
+      if (data.type === 'COMMIT_AUDIO_BUFFER') {
+        const connection = activeConnections.get(ws);
+        if (!connection) return;
+
+        const { sessionId, userId } = connection;
+        const translationSession = translationSessions.get(sessionId);
+        if (!translationSession) return;
+
+        const participant = translationSession.participants.get(userId);
+        if (!participant?.openaiWs || participant.openaiWs.readyState !== WebSocket.OPEN) {
+          console.warn(`⚠️ [COMMIT_AUDIO_BUFFER] OpenAI session not ready for ${userId}`);
+          return;
+        }
+
+        // Clear existing silence timer
+        if (participant.silenceTimer) {
+          clearTimeout(participant.silenceTimer);
+          participant.silenceTimer = null;
+        }
+
+        // Commit the audio buffer and trigger response
+        participant.openaiWs.send(JSON.stringify({
+          type: 'input_audio_buffer.commit'
+        }));
+        
+        // Create response to trigger translation
+        participant.openaiWs.send(JSON.stringify({
+          type: 'response.create',
+          response: {
+            modalities: ['text', 'audio'],
+            instructions: 'Translate the speech you just heard.'
+          }
+        }));
+        
+        console.log(`🎤 [COMMIT_AUDIO_BUFFER] Speech ended for ${userId}, triggering translation`);
+      }
+
+      // Handle incoming mic audio from frontend (OLD - kept for backward compatibility)
       if (data.type === 'MIC_AUDIO') {
         const { audioData } = data; // base64 PCM16 from mic
         const connection = activeConnections.get(ws);

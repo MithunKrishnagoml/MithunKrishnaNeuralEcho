@@ -26,14 +26,25 @@ export function useChatroomConnection({ roomId, participant, onEvent }: UseChatr
   // Use new translation audio hook instead of PCM16Player
   const translationAudio = useTranslationAudio();
 
-  // Setup mic streaming
+  // Setup mic streaming with commit signal support
   useMicStream({
     enabled: micEnabled && isConnected,
     onAudioData: (base64) => {
       if (wsRef.current?.readyState === WebSocket.OPEN) {
+        // ✅ CRITICAL: Send immediately - no batching
         wsRef.current.send(JSON.stringify({
-          type: 'MIC_AUDIO',
-          audioData: base64
+          type: 'MIC_AUDIO_CHUNK',
+          audioData: base64,
+          timestamp: Date.now()
+        }));
+      }
+    },
+    onCommitAudio: () => {
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+        // Signal backend to commit audio buffer and trigger translation
+        wsRef.current.send(JSON.stringify({
+          type: 'COMMIT_AUDIO_BUFFER',
+          timestamp: Date.now()
         }));
       }
     }

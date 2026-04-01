@@ -2,15 +2,16 @@ import { useRef, useCallback, useEffect } from 'react';
 
 interface UseMicStreamOptions {
   onAudioData: (base64: string) => void;
+  onCommitAudio?: () => void; // Signal to commit audio buffer
   enabled: boolean;
 }
 
 /**
- * Simple mic → callback streaming hook
- * Replaces useRealtimeVoice - no more WebRTC to OpenAI
- * Backend now handles all OpenAI connections
+ * TRUE STREAMING mic hook - sends audio in ~20ms chunks
+ * NO BATCHING - immediate transmission for <500ms latency
+ * Backend handles all OpenAI connections
  */
-export function useMicStream({ onAudioData, enabled }: UseMicStreamOptions) {
+export function useMicStream({ onAudioData, onCommitAudio, enabled }: UseMicStreamOptions) {
   const audioCtxRef = useRef<AudioContext | null>(null);
   const workletRef = useRef<AudioWorkletNode | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -58,13 +59,20 @@ export function useMicStream({ onAudioData, enabled }: UseMicStreamOptions) {
       workletRef.current = worklet;
 
       worklet.port.onmessage = (e) => {
-        if (e.data.type !== 'AUDIO_DATA') return;
-        const uint8 = new Uint8Array(e.data.data);
-        // Convert to base64
-        let binary = '';
-        uint8.forEach(b => binary += String.fromCharCode(b));
-        const base64 = btoa(binary);
-        onAudioData(base64);
+        if (e.data.type === 'AUDIO_DATA') {
+          // ✅ CRITICAL: Send immediately - no batching
+          const uint8 = new Uint8Array(e.data.data);
+          // Convert to base64
+          let binary = '';
+          uint8.forEach(b => binary += String.fromCharCode(b));
+          const base64 = btoa(binary);
+          
+          // Send immediately for low latency
+          onAudioData(base64);
+        } else if (e.data.type === 'COMMIT_AUDIO') {
+          // Silence detected - signal backend to commit audio buffer
+          onCommitAudio?.();
+        }
       };
 
       const source = ctx.createMediaStreamSource(stream);
@@ -90,7 +98,7 @@ export function useMicStream({ onAudioData, enabled }: UseMicStreamOptions) {
     } finally {
       isStartingRef.current = false;
     }
-  }, [onAudioData]);
+  }, [onAudioData, onCommitAudio]);
 
   const stop = useCallback(() => {
     // Prevent concurrent stop operations
