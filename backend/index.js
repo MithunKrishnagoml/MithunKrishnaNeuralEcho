@@ -940,10 +940,17 @@ wss.on('connection', (ws, req) => {
       }
 
       // Handle real-time audio chunks
+      // ⚠️ DISABLED: Raw participant audio should NOT be relayed
+      // Only AI_AUDIO_CHUNK (translations) should reach the other participant
+      // This prevents double-playback of both raw voice and translation
       if (data.type === 'AUDIO_CHUNK') {
-        const { participantId, pcmData, sampleRate, sequenceNumber, responseId } = data;
-        console.log(`🎵 [AUDIO_CHUNK] From ${participantId}, seq: ${sequenceNumber}, size: ${pcmData?.length || 0}`);
+        const { participantId, sequenceNumber } = data;
+        console.log(`🎵 [AUDIO_CHUNK] From ${participantId}, seq: ${sequenceNumber} - SKIPPING relay (raw audio not needed)`);
         
+        // DO NOT RELAY - frontend will only play AI_AUDIO_CHUNK (translations)
+        // Relaying this causes the listener to hear both the original voice AND the translation
+        
+        /* DISABLED CODE:
         const connection = activeConnections.get(ws);
         if (!connection) return;
 
@@ -957,7 +964,7 @@ wss.on('connection', (ws, req) => {
           const chunkMessage = {
             type: 'AUDIO_CHUNK',
             sessionId: sessionId,
-            participantId: participantId,  // ✅ Consistent field name
+            participantId: participantId,
             pcmData: pcmData,
             sampleRate: sampleRate || 24000,
             sequenceNumber: sequenceNumber || 0,
@@ -970,6 +977,7 @@ wss.on('connection', (ws, req) => {
         } else {
           console.log(`🎵 [AUDIO_CHUNK] No other participant to relay to`);
         }
+        */
       }
 
       // Handle audio stream end

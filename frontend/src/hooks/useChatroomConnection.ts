@@ -251,6 +251,20 @@ export function useChatroomConnection({ roomId, participant, onEvent }: UseChatr
             console.log('🎵 [AUDIO_CHUNK] Player ready:', !!translatedAudioPlayerRef.current);
             console.log('🎵 ═══════════════════════════════════════════════════════');
             
+            // RULE 1: Never play your own audio back
+            if (data.participantId === participant.id) {
+              console.log('⚠️ [AUDIO_CHUNK] Skipping own audio');
+              break;
+            }
+            
+            // RULE 2: Only play ai-agent chunks (translations), never raw participant audio
+            // Raw participant chunks have participantId === 'participant-XXX' with no speakerId
+            // Translation chunks have participantId === 'ai-agent' with speakerId set
+            if (data.participantId !== 'ai-agent') {
+              console.log('⚠️ [AUDIO_CHUNK] Skipping raw participant audio, only playing translations from ai-agent');
+              break;
+            }
+            
             // Validation checks
             if (!data.audioData) {
               console.error('❌ [AUDIO_CHUNK] FAILED - No audioData in event');
@@ -262,9 +276,7 @@ export function useChatroomConnection({ roomId, participant, onEvent }: UseChatr
               break;
             }
             
-            // BUG FIX #2: Deduplicate chunks by chunkId
-            // Backend broadcasts same audio under multiple participant IDs
-            // Only process each unique chunk once
+            // RULE 3: Deduplicate chunks by chunkId
             const chunkId = data.chunkId || `${data.responseId}_${data.timestamp}`;
             if (processedChunkIdsRef.current.has(chunkId)) {
               console.log('⚠️ [AUDIO_CHUNK] Duplicate chunk detected, skipping:', chunkId);
@@ -284,28 +296,16 @@ export function useChatroomConnection({ roomId, participant, onEvent }: UseChatr
               // Resume audio context on first chunk (autoplay policy)
               translatedAudioPlayerRef.current.resume();
               
-              // BUG FIX #3: Check queue size before enqueueing
-              // If queue is too large, drop the chunk to prevent growing latency
-              const player = translatedAudioPlayerRef.current;
-              const now = player['ctx'].currentTime;
-              const queueAheadMs = (player['nextStartTime'] - now) * 1000;
+              // Enqueue PCM16 chunk - PCM16Player now handles overflow internally
+              const success = translatedAudioPlayerRef.current.enqueue(data.audioData);
               
-              if (queueAheadMs > 600) {
-                console.warn('⚠️ [AUDIO_CHUNK] Queue too large (', queueAheadMs.toFixed(1), 'ms), dropping chunk to prevent latency buildup');
-                break;
+              if (success) {
+                console.log('✅ [AUDIO_CHUNK] Successfully enqueued translation to PCM16Player');
+              } else {
+                console.warn('⚠️ [AUDIO_CHUNK] Chunk dropped due to queue overflow');
               }
-              
-              // Enqueue PCM16 chunk directly - no conversion needed
-              player.enqueue(data.audioData);
-              console.log('✅ [AUDIO_CHUNK] Successfully enqueued to PCM16Player');
-              
-              // BUG FIX #1: Only report error if enqueue actually fails
-              // Success path - no error reporting needed
             } catch (error) {
-              // BUG FIX #1: Only report error in catch block when it actually fails
               console.error('❌ [AUDIO_CHUNK] FAILED to enqueue chunk:', error);
-              // Optionally report to error handler here if needed
-              // reportAudioError('Failed to enqueue audio chunk', { chunkId, error });
             }
             break;
             

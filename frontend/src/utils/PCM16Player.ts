@@ -22,9 +22,28 @@ export class PCM16Player {
     this.gainNode.connect(this.ctx.destination);
   }
 
-  enqueue(base64chunk: string): void {
+  private getQueueAheadMs(): number {
+    const now = this.ctx.currentTime;
+    return (this.nextStartTime - now) * 1000;
+  }
+
+  enqueue(base64chunk: string): boolean {
     if (this.ctx.state === 'suspended') {
       this.ctx.resume();
+    }
+
+    // BUG FIX: Check queue size before enqueueing
+    const queueAheadMs = this.getQueueAheadMs();
+    
+    // Critical overflow - flush entire queue and restart
+    if (queueAheadMs > 1200) {
+      console.warn(`[PCM16Player] CRITICAL overflow (${queueAheadMs.toFixed(0)}ms), flushing queue`);
+      this.flush();
+      // After flush, queue is empty, continue with enqueue
+    } else if (queueAheadMs > 800) {
+      // Hard cap - drop this chunk
+      console.warn(`[PCM16Player] Queue overflow (${queueAheadMs.toFixed(0)}ms), dropping chunk`);
+      return false;
     }
 
     const binary = atob(base64chunk);
@@ -58,6 +77,8 @@ export class PCM16Player {
       durationMs: (buffer.duration * 1000).toFixed(1),
       queueAheadMs: ((this.nextStartTime - now) * 1000).toFixed(1)
     });
+    
+    return true;
   }
 
   flush(): void {
