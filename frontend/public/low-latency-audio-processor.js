@@ -194,7 +194,7 @@ class LowLatencyAudioProcessor extends AudioWorkletProcessor {
       const chunk = this.queue[0];
       const remainingInChunk = chunk.length;
       const remainingInOutput = outputChannel.length - outputIndex;
-      const samplesToC opy = Math.min(remainingInChunk, remainingInOutput);
+      const samplesToCopy = Math.min(remainingInChunk, remainingInOutput);
       
       // Copy samples from chunk to output
       for (let i = 0; i < samplesToCopy; i++) {
