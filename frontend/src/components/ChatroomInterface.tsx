@@ -998,13 +998,25 @@ export function ChatroomInterface({ roomId, participant, onLeaveRoom }: Chatroom
             </Tabs>
           ) : (
             <div className="flex items-center justify-center h-full">
-              <div className="text-center space-y-3 max-w-sm">
+              <div className="text-center space-y-5 max-w-sm w-full px-4">
                 <Loader2 className="w-8 h-8 animate-spin mx-auto text-muted-foreground" />
                 <div>
                   <p className="text-sm font-medium text-foreground">Waiting for someone to join...</p>
-                  <p className="text-xs text-muted-foreground mt-2">
-                    Share the room link to invite someone
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Share this link with the other participant
                   </p>
+                </div>
+                {/* Persistent copyable link — always visible, never disappears */}
+                <div className="flex items-center gap-2 rounded-lg border border-border bg-muted/50 p-2">
+                  <span className="flex-1 text-xs text-muted-foreground truncate select-all font-mono">
+                    {`${window.location.origin}/join/${roomId}`}
+                  </span>
+                  <button
+                    onClick={copyShareableLink}
+                    className="shrink-0 px-3 py-1.5 rounded-md bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors"
+                  >
+                    Copy
+                  </button>
                 </div>
               </div>
             </div>

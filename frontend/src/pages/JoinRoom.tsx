@@ -5,89 +5,100 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Globe, Users, Loader2, ArrowRight } from 'lucide-react';
+import { Globe, Users, Loader2, ArrowRight, AlertCircle } from 'lucide-react';
 import { ChatroomInterface } from '@/components/ChatroomInterface';
 import { ChatroomParticipant } from '@/types/chatroom';
-import { toast } from 'sonner';
 import { BACKEND_URL } from '@/lib/config';
+
+// Detect browser language and pre-select French if applicable
+function detectLanguage(): 'en-US' | 'fr-CA' {
+  const lang = navigator.language || '';
+  return lang.toLowerCase().startsWith('fr') ? 'fr-CA' : 'en-US';
+}
 
 const JoinRoom = () => {
   const { roomId } = useParams<{ roomId: string }>();
   const navigate = useNavigate();
+
   const [name, setName] = useState('');
-  const [language, setLanguage] = useState<'en-US' | 'fr-CA'>('en-US');
+  const [language, setLanguage] = useState<'en-US' | 'fr-CA'>(detectLanguage);
   const [isJoining, setIsJoining] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [participant, setParticipant] = useState<ChatroomParticipant | null>(null);
   const [currentRoom, setCurrentRoom] = useState<string | null>(null);
 
+  // If no roomId in URL at all, stay on page and show error — do NOT silently redirect
   useEffect(() => {
     if (!roomId) {
-      toast.error('Invalid room link');
-      navigate('/chatroom');
-      return;
+      setError('No session ID found in this link. Please ask the host to share the link again.');
     }
-
-    toast.info(`Ready to join room: ${roomId}`, {
-      description: 'Enter your name and language to join the conversation!'
-    });
-  }, [roomId, navigate]);
+  }, [roomId]);
 
   const generateParticipantId = () => {
-    return `participant-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+    if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+      return `participant-${crypto.randomUUID()}`;
+    }
+    return `participant-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
   };
 
-  const handleJoinRoom = async () => {
-    if (!name.trim() || !roomId) {
-      toast.error('Please enter your name');
+  const handleJoin = async () => {
+    if (!name.trim()) {
+      setError('Please enter your name.');
       return;
     }
+    if (!roomId) return;
 
+    setError(null);
     setIsJoining(true);
-    
-    try {
-      // Check if room exists by calling the server
-      const response = await fetch(`${BACKEND_URL}/api/session/${roomId}/status`);
-      
-      if (!response.ok) {
-        if (response.status === 404) {
-          toast.error('Room not found', {
-            description: 'This room may have expired or the link is invalid.'
-          });
-          return;
-        }
-        throw new Error('Failed to check room status');
-      }
 
-      const roomStatus = await response.json();
-      
-      if (roomStatus.participantCount >= 2) {
-        toast.error('Room is full', {
-          description: 'This room already has 2 participants.'
-        });
+    try {
+      // Verify session exists and is not full
+      const statusRes = await fetch(`${BACKEND_URL}/api/session/${roomId}/status`);
+
+      if (statusRes.status === 404) {
+        setError('This session does not exist or has already ended.');
         return;
       }
 
-      // Create participant and join
+      if (!statusRes.ok) {
+        setError('Could not reach the server. Please check your connection and try again.');
+        return;
+      }
+
+      const roomStatus = await statusRes.json();
+
+      if (roomStatus.participantCount >= 2) {
+        setError('This room is full (2/2 participants). Please ask the host to create a new room.');
+        return;
+      }
+
+      // Join the session on the backend
+      const joinRes = await fetch(`${BACKEND_URL}/api/session/join`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: roomId, language }),
+      });
+
+      if (!joinRes.ok) {
+        const err = await joinRes.json().catch(() => ({}));
+        setError(err.error || 'Failed to join the session. Please try again.');
+        return;
+      }
+
+      // All good — enter the chatroom
       const newParticipant: ChatroomParticipant = {
         id: generateParticipantId(),
         name: name.trim(),
         language,
         joinedAt: new Date(),
-        isConnected: true
+        isConnected: true,
       };
 
       setParticipant(newParticipant);
       setCurrentRoom(roomId);
-      
-      toast.success(`Joined room: ${roomId}`, {
-        description: `Welcome ${name}! Connecting to translation session...`
-      });
 
-    } catch (error) {
-      console.error('Error joining room:', error);
-      toast.error('Failed to join room', {
-        description: 'Please check your connection and try again.'
-      });
+    } catch {
+      setError('Could not connect to the server. Please check your internet connection.');
     } finally {
       setIsJoining(false);
     }
@@ -99,10 +110,10 @@ const JoinRoom = () => {
     navigate('/chatroom');
   };
 
-  // If already joined, show the chatroom interface
+  // Already joined — show chatroom directly
   if (participant && currentRoom) {
     return (
-      <ChatroomInterface 
+      <ChatroomInterface
         roomId={currentRoom}
         participant={participant}
         onLeaveRoom={handleLeaveRoom}
@@ -110,10 +121,10 @@ const JoinRoom = () => {
     );
   }
 
-  // Show join form
   return (
     <div className="min-h-screen bg-background flex items-center justify-center p-6">
       <div className="w-full max-w-md space-y-6">
+
         {/* Header */}
         <div className="text-center space-y-2">
           <div className="flex items-center justify-center gap-2">
@@ -125,49 +136,63 @@ const JoinRoom = () => {
           </p>
         </div>
 
-        {/* Room Info */}
+        {/* Error banner */}
+        {error && (
+          <div className="flex items-start gap-3 rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-sm text-destructive">
+            <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+            <span>{error}</span>
+          </div>
+        )}
+
+        {/* Join form — always shown so user knows what went wrong */}
         <Card>
           <CardHeader className="pb-3">
             <CardTitle className="flex items-center gap-2 text-lg">
               <Users className="w-5 h-5" />
-              Room: {roomId}
+              {roomId ? `Room: ${roomId}` : 'Invalid Link'}
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
+
             <div className="space-y-2">
               <Label htmlFor="name">Your Name</Label>
               <Input
                 id="name"
                 placeholder="Enter your name"
                 value={name}
-                onChange={(e) => setName(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleJoinRoom()}
-                disabled={isJoining}
+                onChange={(e) => { setName(e.target.value); setError(null); }}
+                onKeyDown={(e) => e.key === 'Enter' && handleJoin()}
+                disabled={isJoining || !roomId}
+                autoFocus
               />
             </div>
 
             <div className="space-y-2">
               <Label htmlFor="language">Your Language</Label>
-              <Select value={language} onValueChange={(value: 'en-US' | 'fr-CA') => setLanguage(value)}>
-                <SelectTrigger>
+              <Select
+                value={language}
+                onValueChange={(v: 'en-US' | 'fr-CA') => setLanguage(v)}
+                disabled={isJoining || !roomId}
+              >
+                <SelectTrigger id="language">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="en-US"> English</SelectItem>
-                  <SelectItem value="fr-CA"> Franais</SelectItem>
+                  <SelectItem value="en-US">🇬🇧 English</SelectItem>
+                  <SelectItem value="fr-CA">🇫🇷 Français</SelectItem>
                 </SelectContent>
               </Select>
             </div>
 
-            <Button 
-              onClick={handleJoinRoom} 
-              disabled={!name.trim() || isJoining}
+            <Button
+              onClick={handleJoin}
+              disabled={!name.trim() || isJoining || !roomId}
               className="w-full"
             >
               {isJoining ? (
                 <>
                   <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  Joining Room...
+                  Joining...
                 </>
               ) : (
                 <>
@@ -179,14 +204,9 @@ const JoinRoom = () => {
           </CardContent>
         </Card>
 
-        {/* Back to Chatroom */}
         <div className="text-center">
-          <Button 
-            variant="ghost" 
-            onClick={() => navigate('/chatroom')}
-            disabled={isJoining}
-          >
-             Back to Chatroom
+          <Button variant="ghost" onClick={() => navigate('/chatroom')} disabled={isJoining}>
+            ← Back to Chatroom
           </Button>
         </div>
       </div>
