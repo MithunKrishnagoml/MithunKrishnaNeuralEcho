@@ -215,6 +215,9 @@ export class StreamingAudioPlayer {
       return;
     }
 
+    // CRITICAL: Resume AudioContext on every addChunk call, not just on user gesture
+    await this.ensureAudioContextResumed();
+
     if (!this.isInitialized) {
       // Queue chunk until worklet is ready
       this.pendingChunks.push(chunk);
@@ -430,6 +433,22 @@ export class StreamingAudioPlayer {
 
     if (this.options.debug) {
       console.log('[StreamingAudioPlayer] Queue cleared');
+    }
+  }
+
+  /**
+   * Called when a NEW response starts — clears leftover audio from previous turn
+   * and re-enters buffering state so the jitter buffer pre-fills before playback.
+   */
+  public onNewResponse(): void {
+    if (this.workletNode && !this.isDestroyed) {
+      this.workletNode.port.postMessage({ type: 'CLEAR_QUEUE' });
+      this.workletNode.port.postMessage({ type: 'RESET_BUFFER' });
+    }
+    this.pendingChunks = [];
+
+    if (this.options.debug) {
+      console.log('[StreamingAudioPlayer] onNewResponse - cleared queue and reset buffer');
     }
   }
 

@@ -195,24 +195,24 @@ export function TranslationPanel({ langCode }: TranslationPanelProps) {
           <StatusBar status={t.status} />
           <MicButton
             status={isActive ? t.status : "idle"}
-            voiceMode={t.voiceMode}
-            onPress={() => {
-              if (!isActive) t.setActiveSpeakerId(speakerId);
-              t.startListening();
-            }}
-            onRelease={t.stopListening}
+            isMuted={t.isMuted}
+            onToggleMute={t.toggleMute}
             disabled={t.sessionState !== "ready" || (!isActive && isSessionActive)}
+            audioLevel={t.currentDbLevel}
+            dbThreshold={t.dbThreshold}
+            isSpeaking={t.isSpeaking}
           />
           <p className="text-xs text-muted-foreground text-center">
             {t.sessionState === "connecting"
               ? "Warming up Enhanced AI"
               : t.sessionState !== "ready"
                 ? "Select a voice mode for AI enhancement"
-                : t.status === "idle"
-                  ? t.voiceMode === "push-to-talk" ? "Press and hold to speak (AI Enhanced)" : "Tap to start enhanced listening"
-                  : t.status === "listening" && isActive
-                    ? t.voiceMode === "push-to-talk" ? "Release to stop (Processing with AI)" : "Tap to stop (AI Processing)"
-                    : ""}
+                : t.isMuted
+                  ? "Muted - Press M or click to unmute"
+                  : t.isSpeaking && isActive
+                    ? "Speaking... (AI Processing)"
+                    : "Unmuted - Ready to translate"}
+          </p>
           </p>
         </div>
       )}
@@ -226,13 +226,12 @@ export function TranslationPanel({ langCode }: TranslationPanelProps) {
             </div>
             <MicButton
               status={isActive ? t.status : "idle"}
-              voiceMode={t.voiceMode}
-              onPress={() => {
-                if (!isActive) t.setActiveSpeakerId(speakerId);
-                t.startListening();
-              }}
-              onRelease={t.stopListening}
+              isMuted={t.isMuted}
+              onToggleMute={t.toggleMute}
               disabled={!isActive && isSessionActive}
+              audioLevel={t.currentDbLevel}
+              dbThreshold={t.dbThreshold}
+              isSpeaking={t.isSpeaking}
             />
             <div className="flex-1">
               <p className="text-xs text-muted-foreground">

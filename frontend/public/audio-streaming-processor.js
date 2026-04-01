@@ -11,16 +11,15 @@ class AudioStreamingProcessor extends AudioWorkletProcessor {
     this.sampleQueue = [];
     this.isInitialized = false;
     this.isBuffering = false;
-    this.consecutiveSilentFrames = 0;
     this.currentResponseId = null;
     
-    // Jitter buffer settings - minimal for real-time streaming
-    this.JITTER_BUFFER_SIZE = 480; // 20ms at 24kHz (minimal latency)
-    this.SILENCE_THRESHOLD_FRAMES = 480; // 20ms of silence at 24kHz
+    // Jitter buffer settings — 3 chunks pre-roll (~130ms at 24kHz/1024 chunks)
+    this.MIN_BUFFER_CHUNKS = 3;
+    this.MIN_BUFFER_SAMPLES = 1024 * this.MIN_BUFFER_CHUNKS; // ~3072 samples
     
     // Listen for messages from main thread
     this.port.onmessage = (event) => {
-      const { type, data, isBuffering, isKeepAlive, responseId } = event.data;
+      const { type, data, isKeepAlive, responseId } = event.data;
       
       switch (type) {
         case 'INIT':
@@ -34,7 +33,6 @@ class AudioStreamingProcessor extends AudioWorkletProcessor {
           if (data && data.length > 0) {
             // Skip keep-alive samples - they're just to keep AudioContext alive
             if (isKeepAlive) {
-              // Don't add to queue, just acknowledge receipt
               break;
             }
             
@@ -43,7 +41,6 @@ class AudioStreamingProcessor extends AudioWorkletProcessor {
               console.log(`[AudioWorklet] New response detected: ${responseId} (was: ${this.currentResponseId})`);
               this.currentResponseId = responseId;
               this.isBuffering = true; // Start buffering for new response
-              this.consecutiveSilentFrames = 0;
             }
             
             // Add samples to queue safely
@@ -52,9 +49,8 @@ class AudioStreamingProcessor extends AudioWorkletProcessor {
             }
             
             // Check if we should exit buffering mode
-            if (this.isBuffering && this.sampleQueue.length >= this.JITTER_BUFFER_SIZE) {
+            if (this.isBuffering && this.sampleQueue.length >= this.MIN_BUFFER_SAMPLES) {
               this.isBuffering = false;
-              this.consecutiveSilentFrames = 0;
               console.log(`[AudioWorklet] Jitter buffer filled (${this.sampleQueue.length} samples) - starting playback`);
             }
             
@@ -68,8 +64,13 @@ class AudioStreamingProcessor extends AudioWorkletProcessor {
           const clearedSize = this.sampleQueue.length;
           this.sampleQueue = [];
           this.isBuffering = true; // Return to buffering mode
-          this.consecutiveSilentFrames = 0;
           console.log(`[AudioWorklet] CLEAR_QUEUE executed - cleared ${clearedSize} samples, back to buffering`);
+          break;
+          
+        case 'RESET_BUFFER':
+          // Re-enter buffering state without clearing — used after CLEAR_QUEUE
+          this.isBuffering = true;
+          console.log('[AudioWorklet] RESET_BUFFER - re-entering buffering mode');
           break;
           
         case 'GET_QUEUE_SIZE':
@@ -104,15 +105,19 @@ class AudioStreamingProcessor extends AudioWorkletProcessor {
       for (let channel = 0; channel < output.length; channel++) {
         output[channel].fill(0);
       }
-      // Log buffering status periodically
-      if (Math.random() < 0.01) { // Log ~1% of frames to avoid spam
-        console.log(`[AudioWorklet] Still buffering... queue: ${this.sampleQueue.length}/${this.JITTER_BUFFER_SIZE}`);
+      return true;
+    }
+    
+    // If queue ran dry, re-enter buffering immediately
+    if (this.sampleQueue.length === 0) {
+      for (let channel = 0; channel < output.length; channel++) {
+        output[channel].fill(0);
       }
+      this.isBuffering = true; // Re-enter buffering if we run dry
       return true;
     }
     
     let samplesPlayed = 0;
-    let silentSamplesThisFrame = 0;
     
     // Fill output buffer with samples from queue
     for (let i = 0; i < frameCount; i++) {
@@ -127,26 +132,9 @@ class AudioStreamingProcessor extends AudioWorkletProcessor {
         
         if (sample !== 0) {
           samplesPlayed++;
-          this.consecutiveSilentFrames = 0; // Reset silence counter when we get audio
-        } else {
-          silentSamplesThisFrame++;
-        }
-      } else {
-        // Queue is empty - this is normal silence between utterances
-        silentSamplesThisFrame++;
-        this.consecutiveSilentFrames++;
-        
-        // Only go back to buffering if we've had sustained silence AND queue is still empty
-        // This prevents false positives during normal inter-utterance gaps
-        if (this.consecutiveSilentFrames >= this.SILENCE_THRESHOLD_FRAMES && this.sampleQueue.length === 0) {
-          // Check if we should wait for more data
-          if (this.consecutiveSilentFrames >= this.SILENCE_THRESHOLD_FRAMES * 2) {
-            console.log(`[AudioWorklet] Extended silence detected (${this.consecutiveSilentFrames} frames) - returning to buffering mode`);
-            this.isBuffering = true;
-            this.consecutiveSilentFrames = 0;
-          }
         }
       }
+      // else: sample stays 0 (silence for remaining frames)
       
       // Fill all output channels with the same sample (mono to stereo)
       for (let channel = 0; channel < output.length; channel++) {

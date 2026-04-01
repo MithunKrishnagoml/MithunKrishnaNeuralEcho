@@ -11,9 +11,9 @@ const createSessionViaBackend = async (config: SessionConfig) => {
   
   const turnDetection = config.voiceMode === "hands-free" ? {
     type: "server_vad",
-    threshold: 0.6, // Raised from 0.5 to cut background noise
-    prefix_padding_ms: 200, // Lowered from 300ms
-    silence_duration_ms: 800 // Raised from 700ms — gives Whisper time to finalize
+    threshold: 0.3, // Lower threshold for better sensitivity
+    prefix_padding_ms: 100, // Minimal padding
+    silence_duration_ms: 200 // Quick response
   } : null;
 
   const response = await fetch(REALTIME_SESSION_URL, {
@@ -25,10 +25,15 @@ const createSessionViaBackend = async (config: SessionConfig) => {
       instructions: config.instructions,
       turn_detection: turnDetection,
       voice: config.voice || "ballad",
+      modalities: ['text', 'audio'],
       input_audio_transcription: {
         model: "whisper-1",
         language: config.language || "en" // Always pass language hint to prevent hallucination
       },
+      temperature: 0.6,
+      max_response_output_tokens: 2048,
+      input_audio_format: 'pcm16',
+      output_audio_format: 'pcm16',
     }),
   });
 
@@ -111,6 +116,7 @@ export function useRealtimeVoice() {
   const [isConnected, setIsConnected] = useState(false);
   const [sessionState, setSessionState] = useState<SessionState>("disconnected");
   const [currentDbLevel, setCurrentDbLevel] = useState<number | null>(null);
+  const [isMuted, setIsMuted] = useState(false); // Hands-free mute state
 
   const transcriptRef = useRef("");
   const responseRef = useRef("");
@@ -133,7 +139,6 @@ export function useRealtimeVoice() {
   const lastTranscriptRef = useRef<string>("");
   const lastTranscriptTimeRef = useRef<number>(0);
   const speechDetectedRef = useRef<boolean>(false); // Track if OpenAI detected speech
-  const micPressStartTimeRef = useRef<number | null>(null); // Track when mic button was pressed
   
   // Real-time audio tap for streaming chunks instead of blobs
   const audioTapRef = useRef<RealtimeAudioTap | null>(null);
@@ -694,11 +699,15 @@ export function useRealtimeVoice() {
         }
         
         streamRef.current = stream;
-        // Start with mic muted G user must explicitly start listening
+        // Start with mic UNMUTED (hands-free mode - user can mute with button/M key)
         stream.getTracks().forEach((track) => {
-          track.enabled = false;
+          track.enabled = true; // Start unmuted
           pc.addTrack(track, stream);
         });
+        console.log('🎤 [WebRTC] Microphone tracks added - starting UNMUTED (hands-free)');
+        
+        // Start audio monitoring immediately
+        startAudioMonitoring();
 
         // 4a. Set up audio level monitoring
         const audioContext = new AudioContext();
@@ -1086,7 +1095,7 @@ export function useRealtimeVoice() {
 
   /** Send a response.create to trigger manual turn in push-to-talk */
   const commitTurn = useCallback(() => {
-    console.log('= [commitTurn] Called, data channel state:', dcRef.current?.readyState);
+    console.log('[commitTurn] Called, data channel state:', dcRef.current?.readyState);
     
     // Check if data channel exists and is open
     if (!dcRef.current) {
@@ -1099,39 +1108,8 @@ export function useRealtimeVoice() {
       return false;
     }
     
-    // SILENCE DETECTION: Check mic hold duration
-    // If user held mic button for less than 400ms, they almost certainly didn't speak
-    const micPressDuration = micPressStartTimeRef.current 
-      ? Date.now() - micPressStartTimeRef.current 
-      : 0;
-    
-    console.log('⏱️ [SILENCE DETECTION] Mic hold duration:', micPressDuration, 'ms');
-    
-    if (micPressDuration < 400) {
-      console.log('ℹ️ [SILENCE DETECTION] Mic held for less than 400ms, canceling turn');
-      
-      // Clear the audio buffer without committing
-      try {
-        dcRef.current.send(JSON.stringify({ type: "input_audio_buffer.clear" }));
-        console.log('🧹 [SILENCE DETECTION] Cleared audio buffer');
-      } catch (error) {
-        console.error('❌ [SILENCE DETECTION] Error clearing buffer:', error);
-      }
-      
-      // Clear local audio chunks
-      audioChunksRef.current = [];
-      
-      // Notify callback about silence detection (not an error)
-      if (callbacksRef.current?.onSilenceDetected) {
-        callbacksRef.current.onSilenceDetected();
-      }
-      
-      return false;
-    }
-    
     try {
-      console.log('✅ [commitTurn] Mic held for sufficient duration, committing turn');
-      console.log('✅ [commitTurn] Sending input_audio_buffer.commit and response.create');
+      console.log('✅ [commitTurn] Committing turn');
       console.log('🎙️ ════════════════════════════════════════════════════');
       console.log('🎙️ [OPENAI INPUT] AUDIO COMMITTED — OpenAI now processing mic audio');
       console.log('🎙️ [OPENAI INPUT] Whisper will transcribe → GPT-4o will translate');
@@ -1145,13 +1123,50 @@ export function useRealtimeVoice() {
     }
   }, []);
 
-  /** Enable mic audio track (unmute) */
-  /** Enable mic audio track (unmute) */
+  /** Toggle mute/unmute (hands-free mode) */
+  const toggleMute = useCallback(() => {
+    if (isMuted) {
+      // Unmute
+      console.log('[MIC] UNMUTED — mic resumed to OpenAI');
+      setIsMuted(false);
+      
+      // Enable audio tracks
+      streamRef.current?.getTracks().forEach((t) => {
+        t.enabled = true;
+        console.log('[MIC] Track enabled:', t.kind, t.label);
+      });
+      
+      // Start AudioWorklet capture
+      if (micWorkletNodeRef.current) {
+        micWorkletNodeRef.current.port.postMessage({ type: 'START_CAPTURE' });
+        console.log('[MIC] AudioWorklet capture started');
+      }
+      
+      startAudioMonitoring();
+    } else {
+      // Mute
+      console.log('[MIC] MUTED — mic paused, nothing entering OpenAI');
+      setIsMuted(true);
+      
+      // Disable audio tracks (track.enabled = false, NOT track.stop())
+      streamRef.current?.getTracks().forEach((t) => {
+        t.enabled = false;
+        console.log('[MIC] Track disabled:', t.kind, t.label);
+      });
+      
+      // Stop AudioWorklet capture
+      if (micWorkletNodeRef.current) {
+        micWorkletNodeRef.current.port.postMessage({ type: 'STOP_CAPTURE' });
+        console.log('[MIC] AudioWorklet capture stopped');
+      }
+      
+      stopAudioMonitoring();
+    }
+  }, [isMuted, startAudioMonitoring, stopAudioMonitoring]);
+
+  /** Enable mic audio track (unmute) - DEPRECATED, use toggleMute */
   const enableMic = useCallback(() => {
     console.log('🎤 [enableMic] Starting - enabling microphone');
-    
-    // Record when mic button was pressed for silence detection
-    micPressStartTimeRef.current = Date.now();
     
     // Resume AudioContext if suspended (browser autoplay policy)
     if (audioContextRef.current) {
@@ -1217,7 +1232,7 @@ export function useRealtimeVoice() {
     console.log('✅ [enableMic] Microphone enabled and monitoring started');
   }, [startAudioMonitoring]);
 
-  /** Disable mic audio track (mute) */
+  /** Disable mic audio track (mute) - DEPRECATED, use toggleMute */
   const disableMic = useCallback(() => {
     console.log('🎤 [disableMic] Stopping microphone');
     
@@ -1226,9 +1241,6 @@ export function useRealtimeVoice() {
       console.log('🎤 [disableMic] Stopping AudioWorklet capture');
       micWorkletNodeRef.current.port.postMessage({ type: 'STOP_CAPTURE' });
     }
-    
-    // ❌ REMOVED: commitTurn() handles input_audio_buffer.commit
-    // Sending it here causes double-commit which corrupts the buffer
     
     streamRef.current?.getTracks().forEach((t) => (t.enabled = false));
     stopAudioMonitoring();
@@ -1255,7 +1267,9 @@ export function useRealtimeVoice() {
     stopSession, 
     commitTurn, 
     enableMic, 
-    disableMic, 
+    disableMic,
+    toggleMute,
+    isMuted,
     isConnected, 
     sessionState,
     currentDbLevel,

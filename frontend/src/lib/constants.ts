@@ -1,4 +1,4 @@
-﻿export const LANGUAGES = [
+export const LANGUAGES = [
   { code: "en-US", label: "English", region: "US", countryCode: "US" },
   { code: "fr-CA", label: "Canadien français", region: "Canada", countryCode: "CA" },
 ] as const;
@@ -17,7 +17,7 @@ export function getFlagEmoji(countryCode: string): string {
 
 export type LanguageCode = (typeof LANGUAGES)[number]["code"];
 
-export type AppStatus = "idle" | "listening" | "translating" | "error" | "success";
+export type AppStatus = "idle" | "connecting" | "ready" | "listening" | "translating" | "error" | "success";
 
 export const SPEAKER_COLORS = [
   "hsl(24, 95%, 53%)",   // orange (primary)
@@ -68,6 +68,8 @@ export interface SessionInsights {
 
 export const STATUS_MESSAGES: Record<AppStatus, string> = {
   idle: "Tap the mic and speak in your language",
+  connecting: "Connecting to OpenAI...",
+  ready: "Ready — press and hold the mic to speak",
   listening: "Listening speak naturally",
   translating: "Translating",
   error: "Couldn't catch that  please try again",

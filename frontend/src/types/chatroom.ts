@@ -113,7 +113,7 @@ export type ChatroomEvent =
   | { type: 'transcript_delta'; sessionId?: string; fromParticipant?: string; delta: string; timestamp: number; confidence: number }
   | { type: 'PARTIAL_TRANSCRIPT'; sessionId: string; participantId: string; delta: string; itemId: string; timestamp: number }
   | { type: 'TRANSLATION_DELTA'; sessionId: string; participantId: string; delta: string; responseId: string; targetLanguage: 'en-US' | 'fr-CA'; timestamp: number }
-  | { type: 'AUDIO_CHUNK'; sessionId: string; participantId: string; audioData: string; responseId: string; chunkId: string; timestamp: number }
+  | { type: 'AUDIO_CHUNK'; sessionId: string; participantId: string; audioData: string; responseId: string; chunkId: string; timestamp: number; speakerId?: string }
   | { type: 'AI_AUDIO_CHUNK'; sessionId: string; fromParticipant: string; audioData: string; seq: number; timestamp: number }
   | { type: 'VOICE_ACTIVITY_STARTED'; sessionId: string; participantId: string; timestamp: number }
   | { type: 'VOICE_ACTIVITY_STOPPED'; sessionId: string; participantId: string; timestamp: number }

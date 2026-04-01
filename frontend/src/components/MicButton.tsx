@@ -1,33 +1,26 @@
-import { Mic, MicOff, Hand, Zap } from "lucide-react";
+import { Mic, MicOff } from "lucide-react";
 import { AppStatus } from "@/lib/constants";
-import { VoiceMode } from "@/hooks/useRealtimeVoice";
 
 interface MicButtonProps {
   status: AppStatus;
-  voiceMode: VoiceMode;
-  onPress: () => void;
-  onRelease: () => void;
+  isMuted: boolean;
+  onToggleMute: () => void;
   disabled?: boolean;
   audioLevel?: number | null;
   dbThreshold?: number;
-  onToggleMode?: () => void;
-  showModeToggle?: boolean;
+  isSpeaking?: boolean;
 }
 
 export function MicButton({ 
   status, 
-  voiceMode, 
-  onPress, 
-  onRelease, 
+  isMuted,
+  onToggleMute,
   disabled = false, 
   audioLevel = null,
   dbThreshold = -50,
-  onToggleMode,
-  showModeToggle = false
+  isSpeaking = false
 }: MicButtonProps) {
-  const isActive = status === "listening";
-  const isTranslating = status === "translating";
-  const isHandsFree = voiceMode === "hands-free";
+  const isActive = status === "listening" || status === "translating";
 
   // Calculate audio level for visualization (0-1 scale)
   const normalizedLevel = audioLevel !== null 
@@ -37,29 +30,18 @@ export function MicButton({
   // Check if audio is above threshold
   const isAboveThreshold = audioLevel !== null && audioLevel > dbThreshold;
 
-  const handleClick = () => {
-    if (isHandsFree) {
-      // Toggle: start or stop
-      if (isActive || isTranslating) {
-        onRelease();
-      } else {
-        onPress();
-      }
-    }
-  };
-
   return (
     <div className="relative flex flex-col items-center justify-center gap-3">
-      {/* Pulse rings when active */}
-      {isActive && (
+      {/* Pulse rings when speaking (VAD detected) and not muted */}
+      {isSpeaking && !isMuted && (
         <>
           <span className="absolute w-28 h-28 rounded-full bg-primary/20 animate-pulse-ring" />
           <span className="absolute w-28 h-28 rounded-full bg-primary/10 animate-pulse-ring" style={{ animationDelay: "0.5s" }} />
         </>
       )}
 
-      {/* Audio level visualization */}
-      {isActive && audioLevel !== null && (
+      {/* Audio level visualization when not muted */}
+      {!isMuted && audioLevel !== null && (
         <div className="absolute flex items-center gap-1">
           {[0, 1, 2, 3, 4, 5, 6].map((i) => {
             const barHeight = Math.max(4, normalizedLevel * 20 + Math.sin(Date.now() / 100 + i) * 2);
@@ -85,8 +67,8 @@ export function MicButton({
         </div>
       )}
 
-      {/* Audio level indicator ring */}
-      {isActive && audioLevel !== null && (
+      {/* Audio level indicator ring when not muted */}
+      {!isMuted && audioLevel !== null && (
         <div 
           className={`absolute w-24 h-24 rounded-full border-2 transition-all duration-200 ${
             isAboveThreshold 
@@ -100,37 +82,28 @@ export function MicButton({
       )}
 
       <button
-        // Push-to-talk: press and hold. Hands-free: click to toggle
-        onMouseDown={isHandsFree ? undefined : onPress}
-        onMouseUp={isHandsFree ? undefined : onRelease}
-        onTouchStart={isHandsFree ? undefined : onPress}
-        onTouchEnd={isHandsFree ? undefined : onRelease}
-        onClick={isHandsFree ? handleClick : undefined}
-        disabled={disabled || (isTranslating && !isHandsFree)}
+        onClick={onToggleMute}
+        disabled={disabled}
         className={`
           relative z-10 w-20 h-20 rounded-full flex items-center justify-center
           transition-all duration-300 select-none
           ${disabled
             ? "bg-secondary opacity-40 cursor-not-allowed"
-            : isActive
-              ? `bg-primary shadow-[0_0_40px_hsl(var(--live-glow)/0.5)] animate-mic-breathe ${
-                  isAboveThreshold ? "shadow-[0_0_60px_hsl(var(--primary)/0.8)]" : ""
-                }`
-              : isTranslating
-                ? "bg-secondary cursor-wait"
-                : "bg-secondary hover:bg-muted active:scale-95"
+            : isMuted
+              ? "bg-destructive hover:bg-destructive/90 active:scale-95"
+              : isSpeaking
+                ? `bg-primary shadow-[0_0_40px_hsl(var(--live-glow)/0.5)] animate-mic-breathe ${
+                    isAboveThreshold ? "shadow-[0_0_60px_hsl(var(--primary)/0.8)]" : ""
+                  }`
+                : "bg-primary hover:bg-primary/90 active:scale-95"
           }
         `}
-        aria-label={
-          isHandsFree
-            ? isActive ? "Tap to stop" : "Tap to start hands-free"
-            : isActive ? "Release to stop" : "Press and hold to speak"
-        }
+        aria-label={isMuted ? "Unmute (M)" : "Mute (M)"}
       >
-        {isActive ? (
-          <Mic className={`w-8 h-8 text-primary-foreground ${isAboveThreshold ? "animate-pulse" : ""}`} />
+        {isMuted ? (
+          <MicOff className="w-8 h-8 text-primary-foreground" />
         ) : (
-          <MicOff className="w-8 h-8 text-muted-foreground" />
+          <Mic className={`w-8 h-8 text-primary-foreground ${isSpeaking && isAboveThreshold ? "animate-pulse" : ""}`} />
         )}
       </button>
       
@@ -139,28 +112,6 @@ export function MicButton({
         <div className="absolute -bottom-8 left-1/2 transform -translate-x-1/2 text-xs text-muted-foreground font-mono">
           {Math.round(audioLevel)}dB
         </div>
-      )}
-      
-      {/* Mode Toggle Button */}
-      {showModeToggle && onToggleMode && (
-        <button
-          onClick={onToggleMode}
-          disabled={disabled}
-          className="flex items-center gap-2 px-4 py-2 rounded-lg bg-secondary hover:bg-muted transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          aria-label={`Switch to ${isHandsFree ? 'push-to-talk' : 'hands-free'} mode`}
-        >
-          {isHandsFree ? (
-            <>
-              <Hand className="w-4 h-4 text-muted-foreground" />
-              <span className="text-sm text-muted-foreground">Switch to Push-to-Talk</span>
-            </>
-          ) : (
-            <>
-              <Zap className="w-4 h-4 text-primary" />
-              <span className="text-sm text-foreground">Switch to Hands-Free</span>
-            </>
-          )}
-        </button>
       )}
     </div>
   );

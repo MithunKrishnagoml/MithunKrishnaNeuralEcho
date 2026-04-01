@@ -21,66 +21,24 @@ const DEFAULT_LANGUAGES: LanguageCode[] = ["en-US", "fr-CA"];
 /**
  * STRICT VALIDATION: ONLY English and French allowed
  * Returns true if text contains ANY non-Latin characters (Arabic, Chinese, Hindi, etc.)
+ * Uses Unicode property escapes — clean and ESLint-friendly.
  */
 function containsNonEnglishFrenchCharacters(text: string): boolean {
   if (!text || text.trim().length === 0) return false;
-  
-  // Remove common punctuation, numbers, and whitespace for analysis
-  const cleaned = text.replace(/[0-9\s.,!?;:'"()\-]/g, '');
+
+  // Strip numbers, whitespace, and common punctuation
+  const cleaned = text.replace(/[\d\s.,!?;:'"()-]/g, '');
   if (cleaned.length === 0) return false;
-  
-  // STRICT PATTERN 1: Reject ANY non-Latin script immediately
-  const nonLatinPattern = /[\u0590-\u05FF\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\u0900-\u097F\u0980-\u09FF\u0A00-\u0A7F\u0A80-\u0AFF\u0B00-\u0B7F\u0B80-\u0BFF\u0C00-\u0C7F\u0C80-\u0CFF\u0D00-\u0D7F\u0D80-\u0DFF\u0E00-\u0E7F\u0E80-\u0EFF\u0F00-\u0FFF\u1000-\u109F\u10A0-\u10FF\u1100-\u11FF\u1200-\u137F\u13A0-\u13FF\u1400-\u167F\u1680-\u169F\u16A0-\u16FF\u1700-\u171F\u1720-\u173F\u1740-\u175F\u1760-\u177F\u1780-\u17FF\u1800-\u18AF\u1900-\u194F\u1950-\u197F\u1980-\u19DF\u19E0-\u19FF\u1A00-\u1A1F\u1A20-\u1AAF\u1AB0-\u1AFF\u1B00-\u1B7F\u1B80-\u1BBF\u1BC0-\u1BFF\u1C00-\u1C4F\u1C50-\u1C7F\u1C80-\u1C8F\u1CC0-\u1CCF\u1CD0-\u1CFF\u1D00-\u1D7F\u1D80-\u1DBF\u1DC0-\u1DFF\u1E00-\u1EFF\u1F00-\u1FFF\u2000-\u206F\u2070-\u209F\u20A0-\u20CF\u20D0-\u20FF\u2100-\u214F\u2150-\u218F\u2190-\u21FF\u2200-\u22FF\u2300-\u23FF\u2400-\u243F\u2440-\u245F\u2460-\u24FF\u2500-\u257F\u2580-\u259F\u25A0-\u25FF\u2600-\u26FF\u2700-\u27BF\u27C0-\u27EF\u27F0-\u27FF\u2800-\u28FF\u2900-\u297F\u2980-\u29FF\u2A00-\u2AFF\u2B00-\u2BFF\u2C00-\u2C5F\u2C60-\u2C7F\u2C80-\u2CFF\u2D00-\u2D2F\u2D30-\u2D7F\u2D80-\u2DDF\u2DE0-\u2DFF\u2E00-\u2E7F\u2E80-\u2EFF\u2F00-\u2FDF\u2FF0-\u2FFF\u3000-\u303F\u3040-\u309F\u30A0-\u30FF\u3100-\u312F\u3130-\u318F\u3190-\u319F\u31A0-\u31BF\u31C0-\u31EF\u31F0-\u31FF\u3200-\u32FF\u3300-\u33FF\u3400-\u4DBF\u4DC0-\u4DFF\u4E00-\u9FFF\uA000-\uA48F\uA490-\uA4CF\uA4D0-\uA4FF\uA500-\uA63F\uA640-\uA69F\uA6A0-\uA6FF\uA700-\uA71F\uA720-\uA7FF\uA800-\uA82F\uA830-\uA83F\uA840-\uA87F\uA880-\uA8DF\uA8E0-\uA8FF\uA900-\uA92F\uA930-\uA95F\uA960-\uA97F\uA980-\uA9DF\uA9E0-\uA9FF\uAA00-\uAA5F\uAA60-\uAA7F\uAA80-\uAADF\uAAE0-\uAAFF\uAB00-\uAB2F\uAB30-\uAB6F\uAB70-\uABBF\uABC0-\uABFF\uAC00-\uD7AF\uD7B0-\uD7FF\uF900-\uFAFF\uFB00-\uFB4F\uFB50-\uFDFF\uFE00-\uFE0F\uFE10-\uFE1F\uFE20-\uFE2F\uFE30-\uFE4F\uFE50-\uFE6F\uFE70-\uFEFF\uFF00-\uFFEF]/;
-  
-  if (nonLatinPattern.test(text)) {
+
+  // Allow ONLY Basic Latin + Latin Extended (covers English, French accents like é, ç, ù, etc.)
+  // Anything outside Latin script is rejected.
+  const hasNonLatin = /[^\u0020-\u024F\u1E00-\u1EFF]/.test(cleaned);
+  if (hasNonLatin) {
     console.error('🚫 [LANGUAGE BLOCK] REJECTED - Contains non-Latin script:', text);
     return true;
   }
-  
-  // STRICT PATTERN 2: Detect WELSH - common words only (avoid false positives with English words like "hello")
-  // Welsh uses unique word patterns, but be careful not to block common English/French words
-  const welshWordPatterns = [
-    /\b(diolch|wylio|gweld|yma|mae|gan|neu|hefyd|rydw|ydych|cymru|cymraeg|bore da|nos da|hwyl)\b/i,  // Common Welsh words
-  ];
-  
-  // Common English/French words that might look like Welsh patterns but aren't
-  const commonEnglishFrench = /\b(hello|hallo|yellow|follow|million|brilliant|well|will|shall|hello|bonjour|merci|oui|non|comment|vous|nous)\b/i;
-  
-  // Only check Welsh patterns if it's not a common English/French word
-  if (!commonEnglishFrench.test(text)) {
-    for (const pattern of welshWordPatterns) {
-      if (pattern.test(text)) {
-        console.error('🚫 [LANGUAGE BLOCK] REJECTED - Welsh detected:', text);
-        return true;
-      }
-    }
-  }
-  
-  // STRICT PATTERN 3: Detect SPANISH - ñ and unique patterns
-  if (/[ñ¿¡]/.test(text) || /\b(señor|señora|gracias|hola|buenos|días|noches|cómo|está|qué|dónde|cuándo)\b/i.test(text)) {
-    console.error('🚫 [LANGUAGE BLOCK] REJECTED - Spanish detected:', text);
-    return true;
-  }
-  
-  // STRICT PATTERN 4: Detect GERMAN - ß and umlauts in German-specific contexts
-  if (/ß/.test(text) || /\b(ich|du|sie|wir|sind|haben|guten|tag|danke|bitte|deutschland)\b/i.test(text)) {
-    console.error('🚫 [LANGUAGE BLOCK] REJECTED - German detected:', text);
-    return true;
-  }
-  
-  // STRICT PATTERN 5: Detect ITALIAN - common words
-  if (/\b(ciao|grazie|prego|buongiorno|buonasera|signore|signora|come|sta|cosa|quando|dove)\b/i.test(text)) {
-    console.error('🚫 [LANGUAGE BLOCK] REJECTED - Italian detected:', text);
-    return true;
-  }
-  
-  // STRICT PATTERN 6: Detect PORTUGUESE - unique patterns
-  if (/[ãõ]/.test(text) || /\b(obrigado|obrigada|olá|bom|dia|noite|você|está|quando|onde|como)\b/i.test(text)) {
-    console.error('🚫 [LANGUAGE BLOCK] REJECTED - Portuguese detected:', text);
-    return true;
-  }
-  
-  console.log('✅ [LANGUAGE CHECK] Passed - Text appears to be English or French:', text);
+
+  console.log('✅ [LANGUAGE CHECK] Passed - Text appears to be English or French');
   return false;
 }
 
@@ -101,7 +59,7 @@ function cleanFrenchTranscript(text: string, expectedLanguage: string): string |
   console.log('🧹 [TRANSCRIPT CLEAN] Input (passed language check):', text);
   
   // Remove common Whisper hallucinations and artifacts
-  let cleaned = text
+  const cleaned = text
     // Remove "Sous-titres par la communauté d'Amara.org" and similar Amara subtitles
     .replace(/sous-titres?\s+(par|réalisés?\s+par|créés?\s+par).*amara\.org/gi, '')
     // Remove "Merci d'avoir regardé" and similar endings
@@ -160,21 +118,24 @@ function buildTranslationInstructions(activeSpeaker: Speaker, otherSpeakers: Spe
   const targetLangs = [...new Set(otherSpeakers.map((s) => s.language))];
   const targetLang = LANGUAGES.find((l) => l.code === targetLangs[0]);
 
-  return `You are a strict bilingual translator between English and French only.
+  const sourceLabel = sourceLang?.label || activeSpeaker.language;
+  const targetLabel = targetLang?.label || targetLangs[0];
 
-Task:
-Translate from ${sourceLang?.label || activeSpeaker.language} to ${targetLang?.label || targetLangs[0]}.
+  return `You are a SILENT translation engine. Your ONLY function is to output the translation of the user's speech and nothing else.
 
-Hard constraints:
-1. Output translation only. No preface, no explanation, no markdown.
-2. Preserve meaning exactly. Do not paraphrase, summarize, embellish, or infer intent.
-3. Keep sentence structure close to source when possible.
-4. Keep names, numbers, dates, and factual details unchanged except required grammar agreement.
-5. Do not add greetings, politeness, or conversational filler.
-6. If source contains multiple clauses, translate all clauses; do not drop any part.
-7. If a token is unclear, keep it as-is rather than inventing content.
-8. If input is not English or French, return an empty string.
-9. Never output text in a third language.
+ABSOLUTE RULES — violating any of these is a failure:
+1. Output ONLY the translated text. Never add greetings, commentary, explanations, or acknowledgements.
+2. Do NOT answer questions — translate them word-for-word.
+3. Do NOT paraphrase. Preserve every word, including filler words ("um", "uh", "like").
+4. Do NOT add punctuation or formatting not present in the source.
+5. Translate from ${sourceLabel} to ${targetLabel} ONLY.
+6. If you cannot detect speech (silence, noise), output NOTHING — empty string only.
+7. NEVER say "I", "me", "my", or refer to yourself in any way.
+8. Keep names, numbers, dates, and factual details unchanged except required grammar agreement.
+9. If input is not English or French, return an empty string.
+10. Never output text in a third language.
+
+You are not an assistant. You are a machine translation pipe. Silence = empty output.
 
 Anti-drift examples:
 Input: "Aujourd'hui est une tres belle journee et j'aimerais que tu sois la avec moi."
@@ -185,6 +146,7 @@ Input: "Hello, how are you?"
 Bad: "Hi there, I hope you're doing great today!"
 Good: "Bonjour, comment allez-vous ?"`;
 }
+
 
 /**
  * Validates translation output to prevent hallucination
@@ -250,6 +212,9 @@ interface AppContextType {
   clearHistory: () => void;
   startListening: () => void;
   stopListening: () => void;
+  toggleMute: () => void;
+  isMuted: boolean;
+  isSpeaking: boolean;
   autoDetect: boolean;
   setAutoDetect: (v: boolean) => void;
   translationEnabled: boolean;
@@ -330,7 +295,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const startTimeRef = useRef(0);
   const currentMessageIdRef = useRef<string | null>(null); // Track current message being processed
 
-  const { initSession, attachCallbacks, stopSession, commitTurn, enableMic, disableMic, isConnected, sessionState, currentDbLevel, setDbThreshold: setDbThresholdHook, getMediaStreams } = useRealtimeVoice();
+  const { initSession, attachCallbacks, stopSession, commitTurn, enableMic, disableMic, toggleMute: toggleMuteHook, isMuted, isConnected, sessionState, currentDbLevel, setDbThreshold: setDbThresholdHook, getMediaStreams } = useRealtimeVoice();
+  
+  // Track VAD speaking state
+  const [isSpeaking, setIsSpeaking] = useState(false);
 
   // Recording hooks
   const { recordingState, startRecording, stopRecording, downloadRecording: downloadRecordingFile, clearRecording } = useCallRecording();
@@ -537,6 +505,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, [stopSession, recordingState, stopRecording, sessionState, voiceMode, disableMic, commitTurn]);
 
+  // Toggle mute/unmute for hands-free mode
+  const toggleMute = useCallback(() => {
+    if (sessionState !== 'ready') {
+      console.warn('⚠️ [toggleMute] Session not ready, cannot toggle mute');
+      return;
+    }
+    toggleMuteHook();
+  }, [toggleMuteHook, sessionState]);
+
   const setVoiceModeAndInit = useCallback((mode: VoiceMode) => {
     console.log('🔄 [setVoiceModeAndInit] Called with mode:', mode, 'current sessionState:', sessionState);
     setVoiceMode(mode);
@@ -582,24 +559,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [downloadRecordingFile]);
 
   const downloadTranscript = useCallback(() => {
-    const transcriptData: TranscriptData = {
-      messages: messages.map(msg => {
-        const translation = Object.values(msg.translations || {})[0];  // Get first translation
-        return {
-          timestamp: msg.timestamp,
-          speaker: speakers.find(s => s.id === msg.speakerId)?.name || `Speaker ${msg.speakerId + 1}`,
-          language: speakers.find(s => s.id === msg.speakerId)?.language || 'en-US',
-          text: msg.sourceText,
-          translation: translation || undefined
-        };
-      }),
-      sessionDuration: insights.sessionDuration,
-      totalMessages: insights.totalMessages,
-      avgConfidence: insights.avgConfidence
-    };
-    
+    const transcriptData: TranscriptData = createTranscriptData(
+      messages,
+      speakers,
+      insights,
+      sessionStart.current
+    );
+
     downloadTranscriptFile(transcriptData);
-  }, [messages, speakers, insights, downloadTranscriptFile]);
+  }, [messages, speakers, insights, downloadTranscriptFile, createTranscriptData]);
 
   // Attach callbacks when session state changes
   useEffect(() => {
@@ -618,6 +586,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           console.log('📝 [onTranscript] Speaker ID:', speakerId);
           console.log('🎤 ═══════════════════════════════════════════════════════');
 
+          // eslint-disable-next-line no-misleading-character-class
           const hasDisallowedScript = /[\u0590-\u05FF\u0600-\u06FF\u0750-\u077F\u0900-\u097F\u4E00-\u9FFF\u3040-\u309F\u30A0-\u30FF]/.test(transcript || '');
           if (hasDisallowedScript) {
             console.warn('⚠️ [onTranscript] Ignoring transcript with disallowed script for en/fr session:', transcript);
@@ -782,9 +751,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
         },
         {
           onVoiceActivityStarted: () => {
+            console.log('🎤 [VAD] Voice activity started');
+            setIsSpeaking(true);
             realtimeStreamingCallbacksRef.current?.onVoiceActivityStarted?.();
           },
           onVoiceActivityStopped: () => {
+            console.log('🎤 [VAD] Voice activity stopped');
+            setIsSpeaking(false);
             realtimeStreamingCallbacksRef.current?.onVoiceActivityStopped?.();
           },
           onPartialTranscript: (delta: string, itemId: string) => {
@@ -841,6 +814,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
     realtimeStreamingCallbacksRef.current = callbacks;
   }, []);
 
+  // Keyboard shortcut: M key toggles mute
+  useEffect(() => {
+    const handleKeyPress = (e: KeyboardEvent) => {
+      // Only handle M key if not typing in an input field
+      if ((e.key === 'm' || e.key === 'M') && 
+          !(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement)) {
+        e.preventDefault();
+        toggleMute();
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyPress);
+    return () => document.removeEventListener('keydown', handleKeyPress);
+  }, [toggleMute]);
+
   const value: AppContextType = {
     status,
     speakers,
@@ -854,6 +842,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     clearHistory,
     startListening,
     stopListening,
+    toggleMute,
+    isMuted,
+    isSpeaking,
     autoDetect,
     setAutoDetect,
     translationEnabled,

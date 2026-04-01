@@ -196,20 +196,24 @@ class TranslationSession {
 }
 
 function buildTranslationInstructions(inputLang, outputLang) {
+  const inputLangName = inputLang === "en-US" ? "English" : "French";
   const outputLangName = outputLang === "en-US" ? "English" : "French";
 
-  return `You are a TRANSLATION MACHINE that translates FROM ${inputLang === "en-US" ? "English" : "French"} TO ${outputLangName}.
+  return `You are a SILENT translation engine. Your ONLY function is to output the translation of the user's speech and nothing else.
 
-CRITICAL TRANSLATION RULES:
-1. ONLY translate the input text word-for-word
-2. DO NOT respond to questions or greetings - TRANSLATE them exactly
-3. DO NOT generate, invent, or roleplay content
-4. DO NOT answer questions - translate the question itself
-5. If input is a greeting directed at someone, translate that greeting exactly
-6. NEVER add your own responses or commentary
-7. Output ONLY the direct translation of what was said
-8. Preserve all punctuation, names, and formatting exactly
-9. If you cannot translate, output "TRANSLATION_ERROR" only
+ABSOLUTE RULES — violating any of these is a failure:
+1. Output ONLY the translated text. Never add greetings, commentary, explanations, or acknowledgements.
+2. Do NOT answer questions — translate them word-for-word.
+3. Do NOT paraphrase. Preserve every word, including filler words ("um", "uh", "like").
+4. Do NOT add punctuation or formatting not present in the source.
+5. Translate from ${inputLangName} to ${outputLangName} ONLY.
+6. If you cannot detect speech (silence, noise), output NOTHING — empty string only.
+7. NEVER say "I", "me", "my", or refer to yourself in any way.
+8. Keep names, numbers, dates, and factual details unchanged except required grammar agreement.
+9. If input is not English or French, return an empty string.
+10. Never output text in a third language.
+
+You are not an assistant. You are a machine translation pipe. Silence = empty output.
 
 EXAMPLES:
 Input: "Good morning Prasanna, thank you for joining"
@@ -218,9 +222,7 @@ NOT: "Bonjour, merci de me recevoir..."
 
 Input: "How are you today?"
 Output: "Comment allez-vous aujourd'hui ?"
-NOT: "Je vais bien, merci"
-
-You are a translator only. Translate the input exactly as spoken.`;
+NOT: "Je vais bien, merci"`;
 }
 
 // API Routes
@@ -553,6 +555,36 @@ wss.on('connection', (ws, req) => {
         }
       }
 
+      // Handle voice activity events (relay to all participants)
+      if (data.type === 'VOICE_ACTIVITY_STARTED' || data.type === 'VOICE_ACTIVITY_STOPPED') {
+        const { participantId } = data;
+        const speaking = data.type === 'VOICE_ACTIVITY_STARTED';
+        
+        console.log(`🎤 [VAD] ${speaking ? 'Speech started' : 'Speech stopped'} for participant: ${participantId}`);
+        
+        const connection = activeConnections.get(ws);
+        if (!connection) return;
+
+        const { sessionId } = connection;
+        const translationSession = translationSessions.get(sessionId);
+        if (!translationSession) return;
+
+        // Broadcast VAD event to ALL participants
+        for (const [userId, participant] of translationSession.participants.entries()) {
+          if (participant.socket?.readyState === WebSocket.OPEN) {
+            participant.socket.send(JSON.stringify({
+              type: 'vad_speaking',
+              sessionId: sessionId,
+              speakerId: participantId,
+              speaking: speaking,
+              timestamp: Date.now()
+            }));
+            
+            console.log(`🎤 [VAD] Sent vad_speaking event to participant ${userId}: speakerId=${participantId}, speaking=${speaking}`);
+          }
+        }
+      }
+
       // Handle speech transcript for room-based translation
       if (data.type === 'SPEECH_TRANSCRIPT') {
         const { participantId, transcript, language } = data;
@@ -782,7 +814,11 @@ wss.on('connection', (ws, req) => {
       // Handle AI audio chunks from OpenAI (relay to all participants)
       if (data.type === 'AI_AUDIO_CHUNK') {
         const { participantId, audioData, seq } = data;
-        console.log(`🤖 [AI_AUDIO_CHUNK] From ${participantId}, seq: ${seq}, size: ${audioData?.length || 0}`);
+        
+        // Log every 50th chunk to avoid spam
+        if (seq % 50 === 0) {
+          console.log(`[RELAY] AI_AUDIO_CHUNK from ${participantId}, seq: ${seq}, size: ${audioData?.length || 0}`);
+        }
         
         const connection = activeConnections.get(ws);
         if (!connection) return;
@@ -791,26 +827,26 @@ wss.on('connection', (ws, req) => {
         const translationSession = translationSessions.get(sessionId);
         if (!translationSession) return;
 
-        // Get the other participant (the one who should receive AI audio)
-        const otherParticipant = translationSession.getOtherParticipant(senderUserId);
-        
-        if (otherParticipant?.socket?.readyState === WebSocket.OPEN) {
-          // Use "ai-agent" as participantId so frontend knows it's AI, not the sender
-          const chunkMessage = {
-            type: 'AUDIO_CHUNK',
-            sessionId: sessionId,
-            participantId: 'ai-agent',  // ✅ AI has its own ID
-            pcmData: audioData,
-            sampleRate: 24000,
-            sequenceNumber: seq,
-            responseId: `ai_response_${Date.now()}`,
-            timestamp: Date.now()
-          };
+        // Broadcast to ALL participants (including sender for local playback)
+        for (const [userId, participant] of translationSession.participants.entries()) {
+          if (participant.socket?.readyState === WebSocket.OPEN) {
+            const chunkMessage = {
+              type: 'AUDIO_CHUNK',
+              sessionId: sessionId,
+              participantId: 'ai-agent',  // AI has its own ID
+              audioData: audioData,
+              chunkId: `ai_chunk_${seq}`,
+              responseId: `ai_response_${senderUserId}`,
+              timestamp: Date.now(),
+              speakerId: senderUserId // Track which user's AI this is
+            };
 
-          otherParticipant.socket.send(JSON.stringify(chunkMessage));
-          console.log(`🤖 [AI_AUDIO_CHUNK] Sent to other participant as AUDIO_CHUNK with participantId: ai-agent`);
-        } else {
-          console.log(`🤖 [AI_AUDIO_CHUNK] No other participant available to receive AI audio`);
+            participant.socket.send(JSON.stringify(chunkMessage));
+            
+            if (seq % 50 === 0) {
+              console.log(`[RELAY] Sent chunk #${seq} to participant ${userId}`);
+            }
+          }
         }
       }
 
@@ -1148,7 +1184,7 @@ app.get('/api/session/:roomId/status', (req, res) => {
 // Create OpenAI Realtime Session endpoint (for frontend WebRTC)
 app.post('/api/openai/realtime-session', async (req, res) => {
   try {
-    const { instructions, turn_detection, voice } = req.body;
+    const { instructions, turn_detection, voice, input_audio_transcription, modalities, temperature, max_response_output_tokens, input_audio_format, output_audio_format } = req.body;
     
     console.log('🔧 [OpenAI Session] Request received');
     console.log('🔧 [OpenAI Session] Checking for OPENAI_API_KEY...');
@@ -1166,6 +1202,10 @@ app.post('/api/openai/realtime-session', async (req, res) => {
     console.log('✅ [OpenAI Session] OPENAI_API_KEY found, creating realtime session');
     console.log('🔧 [OpenAI Session] API Key (first 10 chars):', process.env.OPENAI_API_KEY.substring(0, 10) + '...');
 
+    // CRITICAL: Forward language hint to Whisper to prevent wrong-language transcripts
+    const audioTranscription = input_audio_transcription || { model: 'whisper-1' };
+    console.log('🔧 [OpenAI Session] Whisper config:', audioTranscription);
+
     const response = await fetch('https://api.openai.com/v1/realtime/sessions', {
       method: 'POST',
       headers: {
@@ -1177,11 +1217,10 @@ app.post('/api/openai/realtime-session', async (req, res) => {
         instructions: instructions || 'You are a helpful assistant.',
         turn_detection: turn_detection || null,
         voice: voice || 'ballad',
-        input_audio_transcription: {
-          model: 'whisper-1'
-        },
+        input_audio_transcription: audioTranscription,
         modalities: ['text', 'audio'],
         temperature: 0.6,
+        max_response_output_tokens: 2048,
         input_audio_format: 'pcm16',
         output_audio_format: 'pcm16',
         tools: [],

@@ -254,21 +254,22 @@ export function useChatroomConnection({ roomId, participant, onEvent }: UseChatr
             console.log('🎵 ═══════════════════════════════════════════════════════');
             console.log('🎵 [AUDIO_CHUNK] Received audio chunk');
             console.log('🎵 [AUDIO_CHUNK] From participant:', data.participantId);
+            console.log('🎵 [AUDIO_CHUNK] Speaker ID:', data.speakerId ?? 'not provided');
             console.log('🎵 [AUDIO_CHUNK] My participant ID:', participant.id);
             console.log('🎵 [AUDIO_CHUNK] Response ID:', data.responseId);
             console.log('🎵 [AUDIO_CHUNK] Audio data size:', data.audioData?.length || 0, 'bytes');
             console.log('🎵 [AUDIO_CHUNK] Player ready:', !!translatedAudioPlayerRef.current);
             console.log('🎵 ═══════════════════════════════════════════════════════');
             
-            // ✅ FIX: Allow AI audio (participantId: 'ai-agent') but skip own user audio
-            // AI audio comes from OTHER user's OpenAI session, so we SHOULD play it
-            // Only skip if it's from our own participant ID (not AI)
-            if (data.participantId === participant.id) {
-              console.warn('⚠️ [AUDIO_CHUNK] FILTERED OUT - Same as my participant ID, ignoring own audio');
+            // ✅ CRITICAL FIX: Play AI audio from OTHER user's session
+            // If speakerId === my ID, this is MY AI translating MY speech → DON'T play (I hear my own translation)
+            // If speakerId !== my ID, this is OTHER user's AI translating THEIR speech → PLAY (I hear their translation)
+            if (data.speakerId && data.speakerId === participant.id) {
+              console.warn('⚠️ [AUDIO_CHUNK] FILTERED OUT - This is my own AI translation, not playing');
               break;
             }
             
-            // Log if this is AI audio
+            // Log if this is AI audio from other user
             if (data.participantId === 'ai-agent') {
               console.log('🤖 [AUDIO_CHUNK] This is AI audio from other user\'s translation - PLAYING ✅');
             }
@@ -289,7 +290,7 @@ export function useChatroomConnection({ roomId, participant, onEvent }: UseChatr
               
               // Convert base64 audio to audio chunk format
               const chunk = {
-                id: data.chunkId,
+                id: data.chunkId || `chunk_${Date.now()}`,
                 data: data.audioData,
                 timestamp: data.timestamp || Date.now(),
                 sequenceNumber: 0, // Not provided in AUDIO_CHUNK type
@@ -446,6 +447,15 @@ export function useChatroomConnection({ roomId, participant, onEvent }: UseChatr
 
           case 'VOICE_ACTIVITY_STOPPED':
             console.log('✅ Voice activity stopped for participant:', data.participantId);
+            break;
+          
+          case 'vad_speaking':
+            console.log('🎤 [VAD] Received vad_speaking event:', {
+              speakerId: data.speakerId,
+              speaking: data.speaking,
+              myId: participant.id
+            });
+            // This will be handled by the parent component to show speaking indicators
             break;
             
           case 'USER_LEFT_ROOM':
