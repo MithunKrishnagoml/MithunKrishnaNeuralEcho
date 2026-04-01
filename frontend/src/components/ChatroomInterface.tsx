@@ -459,6 +459,24 @@ export function ChatroomInterface({ roomId, participant, onLeaveRoom }: Chatroom
     };
   }, [sendTranslatedAudio]);
 
+  // Debug: Monitor otherParticipant changes
+  useEffect(() => {
+    console.log('═══════════════════════════════════════════════════════');
+    console.log('👥 [ChatroomInterface] otherParticipant state changed!');
+    console.log('👥 [ChatroomInterface] otherParticipant:', otherParticipant);
+    if (otherParticipant) {
+      console.log('👥 [ChatroomInterface] Other participant details:', {
+        id: otherParticipant.id,
+        name: otherParticipant.name,
+        language: otherParticipant.language,
+        isConnected: otherParticipant.isConnected
+      });
+    } else {
+      console.log('👥 [ChatroomInterface] No other participant (waiting...)');
+    }
+    console.log('═══════════════════════════════════════════════════════');
+  }, [otherParticipant]);
+
   // Debug: Monitor transcript history changes
   useEffect(() => {
     console.log(' [ChatroomInterface] Transcript history updated:', {

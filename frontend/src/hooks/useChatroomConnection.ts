@@ -95,7 +95,12 @@ export function useChatroomConnection({ roomId, participant, onEvent }: UseChatr
     wsRef.current = ws;
 
     ws.onopen = () => {
-      console.log('Connected to chatroom:', roomId);
+      console.log('✅ [WebSocket] Connected to chatroom:', roomId);
+      console.log('✅ [WebSocket] My participant info:', {
+        id: participant.id,
+        name: participant.name,
+        language: participant.language
+      });
       setIsConnected(true);
       connectionAttemptRef.current = false;
       
@@ -109,7 +114,7 @@ export function useChatroomConnection({ roomId, participant, onEvent }: UseChatr
             language: participant.language,
             name: participant.name
           };
-          console.log('Sending join_session message:', joinMessage);
+          console.log('📤 [WebSocket] Sending join_session message:', joinMessage);
           ws.send(JSON.stringify(joinMessage));
         }
       }, 100);
@@ -130,18 +135,28 @@ export function useChatroomConnection({ roomId, participant, onEvent }: UseChatr
         
         switch (data.type) {
           case 'USER_JOINED_ROOM':
-            console.log('✅ Successfully joined room:', data.sessionId);
-            console.log('✅ Participant count:', data.participantCount);
-            console.log('✅ Received data:', data);
-            console.log('✅ New participant name:', data.newParticipantName);
-            console.log('✅ Current participant ID:', participant.id);
-            console.log('✅ Joining user ID:', data.userId);
+            console.log('═══════════════════════════════════════════════════════');
+            console.log('📥 [USER_JOINED_ROOM] Event received!');
+            console.log('📥 [USER_JOINED_ROOM] Session ID:', data.sessionId);
+            console.log('📥 [USER_JOINED_ROOM] Participant count:', data.participantCount);
+            console.log('📥 [USER_JOINED_ROOM] Joining user ID:', data.userId);
+            console.log('📥 [USER_JOINED_ROOM] My participant ID:', participant.id);
+            console.log('📥 [USER_JOINED_ROOM] Is this me joining?', data.userId === participant.id);
+            console.log('📥 [USER_JOINED_ROOM] New participant name:', data.newParticipantName);
+            console.log('📥 [USER_JOINED_ROOM] New participant language:', data.newParticipantLanguage);
+            console.log('📥 [USER_JOINED_ROOM] Current otherParticipant state:', otherParticipant);
+            console.log('═══════════════════════════════════════════════════════');
             
             // Set other participant if someone else joined OR if we're the second person joining
             if (data.participantCount === 2) {
               // If this is notification about someone else joining (userId !== my id)
               if (data.userId !== participant.id) {
-                console.log('✅ Setting other participant (someone joined after me):', data.newParticipantName);
+                console.log('✅ [USER_JOINED_ROOM] Someone else joined! Setting otherParticipant');
+                console.log('✅ [USER_JOINED_ROOM] Other participant details:', {
+                  id: data.userId,
+                  name: data.newParticipantName,
+                  language: data.newParticipantLanguage
+                });
                 setOtherParticipant({
                   id: data.userId || 'other-participant',
                   name: data.newParticipantName || 'Other Participant',
@@ -149,28 +164,36 @@ export function useChatroomConnection({ roomId, participant, onEvent }: UseChatr
                   joinedAt: new Date(),
                   isConnected: true
                 });
+                console.log('✅ [USER_JOINED_ROOM] otherParticipant state updated successfully');
               }
               // If this is my own join confirmation and room already has 2 people,
               // the other participant info will come in translation_ready event
               else {
-                console.log('✅ I joined a room with 2 people - waiting for translation_ready with other participant info');
+                console.log('ℹ️ [USER_JOINED_ROOM] This is my own join confirmation');
+                console.log('ℹ️ [USER_JOINED_ROOM] Room has 2 people - waiting for translation_ready');
               }
             } else {
-              console.log('✅ Not setting other participant. Reason:', {
-                participantCount: data.participantCount,
-                isSameUser: data.userId === participant.id
-              });
+              console.log('ℹ️ [USER_JOINED_ROOM] Not setting otherParticipant yet');
+              console.log('ℹ️ [USER_JOINED_ROOM] Reason: participantCount =', data.participantCount);
             }
             break;
             
           case 'translation_ready':
-            console.log('✅ Translation session is ready with 2 participants');
-            console.log('✅ Both participants are now connected!');
-            console.log('✅ Other participant data from backend:', data.otherParticipant);
+            console.log('═══════════════════════════════════════════════════════');
+            console.log('🚀 [translation_ready] Translation session is ready!');
+            console.log('🚀 [translation_ready] Both participants are now connected');
+            console.log('🚀 [translation_ready] Other participant data:', data.otherParticipant);
+            console.log('🚀 [translation_ready] Current otherParticipant state:', otherParticipant);
+            console.log('═══════════════════════════════════════════════════════');
             
             // ALWAYS set other participant from translation_ready event (backend provides accurate info)
             if (data.otherParticipant) {
-              console.log('✅ Setting other participant from translation_ready:', data.otherParticipant.name);
+              console.log('✅ [translation_ready] Setting otherParticipant from backend data');
+              console.log('✅ [translation_ready] Other participant details:', {
+                id: data.otherParticipant.id,
+                name: data.otherParticipant.name,
+                language: data.otherParticipant.language
+              });
               setOtherParticipant({
                 id: data.otherParticipant.id,
                 name: data.otherParticipant.name,
@@ -178,13 +201,15 @@ export function useChatroomConnection({ roomId, participant, onEvent }: UseChatr
                 joinedAt: new Date(),
                 isConnected: true
               });
-            } else if (!otherParticipant) {
-              console.warn('⚠️ translation_ready received but no otherParticipant data provided');
+              console.log('✅ [translation_ready] otherParticipant state updated successfully');
+            } else {
+              console.warn('⚠️ [translation_ready] No otherParticipant data in event!');
+              console.warn('⚠️ [translation_ready] This should not happen - backend should provide peer info');
             }
             
             // Start streaming mic audio to backend
             setMicEnabled(true);
-            console.log('🎤 [MicStream] Enabled - starting audio streaming');
+            console.log('🎤 [translation_ready] Mic enabled - audio streaming will start');
             break;
             
           case 'TRANSLATED_MESSAGE':
