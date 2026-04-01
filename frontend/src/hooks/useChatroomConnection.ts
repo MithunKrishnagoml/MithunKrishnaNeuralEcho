@@ -122,6 +122,17 @@ export function useChatroomConnection({ roomId, participant, onEvent }: UseChatr
 
     ws.onmessage = (event) => {
       console.log('🌐🌐🌐 [WebSocket] onmessage fired! Raw data:', event.data);
+      
+      // CRITICAL DEBUG: Log EVERY message type we receive
+      let parsedType = 'UNKNOWN';
+      try {
+        const parsed = JSON.parse(event.data);
+        parsedType = parsed.type;
+      } catch (e) {
+        console.error('❌ [WebSocket] Failed to parse message:', e);
+      }
+      console.log('📨 [WebSocket] Message type:', parsedType);
+      
       try {
         const data: ChatroomEvent = JSON.parse(event.data);
         console.log('🔄 [FRONTEND] Parsed event type:', data.type);
