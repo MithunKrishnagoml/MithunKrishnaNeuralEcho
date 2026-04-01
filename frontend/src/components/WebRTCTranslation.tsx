@@ -75,7 +75,8 @@ export function WebRTCTranslation({ onCallStarted, onCallEnded }: WebRTCTranslat
   }, [roomId]);
 
   const copyShareLink = useCallback(() => {
-    const shareLink = `${window.location.origin}/phone?room=${roomId}`;
+    const baseUrl = import.meta.env.VITE_APP_BASE_URL || window.location.origin;
+    const shareLink = `${baseUrl}/phone?room=${roomId}`;
     navigator.clipboard.writeText(shareLink);
   }, [roomId]);
 
@@ -176,7 +177,7 @@ export function WebRTCTranslation({ onCallStarted, onCallEnded }: WebRTCTranslat
                 </p>
                 <div className="flex items-center gap-2">
                   <code className="flex-1 text-xs bg-background px-2 py-1 rounded border">
-                    {window.location.origin}/phone?room={roomId}
+                    {`${import.meta.env.VITE_APP_BASE_URL || window.location.origin}/phone?room=${roomId}`}
                   </code>
                   <Button
                     variant="outline"

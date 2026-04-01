@@ -701,8 +701,8 @@ export function ChatroomInterface({ roomId, participant, onLeaveRoom }: Chatroom
   }, [isMuted, isVoiceReady, sessionState, isConnected, otherParticipant, startRoomListening, stopRoomListening]);
 
   const copyShareableLink = useCallback(() => {
-    // Always use current origin so the link works on any deployment
-    const shareableLink = `${window.location.origin}/join/${roomId}`;
+    const baseUrl = import.meta.env.VITE_APP_BASE_URL || window.location.origin;
+    const shareableLink = `${baseUrl}/join/${roomId}`;
     navigator.clipboard.writeText(shareableLink);
     toast.success("Shareable link copied!", {
       description: shareableLink
@@ -1009,7 +1009,7 @@ export function ChatroomInterface({ roomId, participant, onLeaveRoom }: Chatroom
                 {/* Persistent copyable link — always visible, never disappears */}
                 <div className="flex items-center gap-2 rounded-lg border border-border bg-muted/50 p-2">
                   <span className="flex-1 text-xs text-muted-foreground truncate select-all font-mono">
-                    {`${window.location.origin}/join/${roomId}`}
+                    {`${import.meta.env.VITE_APP_BASE_URL || window.location.origin}/join/${roomId}`}
                   </span>
                   <button
                     onClick={copyShareableLink}

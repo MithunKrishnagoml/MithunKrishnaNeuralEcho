@@ -81,8 +81,9 @@ const Chatroom = () => {
       setCurrentRoom(roomId);
       setParticipant(newParticipant);
       
-      // Always use current origin so the link works on any deployment
-      const shareableLink = `${window.location.origin}/join/${roomId}`;
+      // Always use stable production URL for share link
+      const baseUrl = import.meta.env.VITE_APP_BASE_URL || window.location.origin;
+      const shareableLink = `${baseUrl}/join/${roomId}`;
       
       toast.success(`Room created!`, {
         description: shareableLink,
