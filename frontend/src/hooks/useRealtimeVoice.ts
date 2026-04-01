@@ -239,6 +239,18 @@ export function useRealtimeVoice() {
         lastTranscriptTimeRef.current = now;
         
         transcriptRef.current = finalTranscript;
+        
+        // ─────────────────────────────────────────────────────────────────
+        // 📢 TEXT ENTERING OPENAI FOR TRANSLATION
+        // This is the exact text Whisper heard from the microphone.
+        // GPT-4o will now translate this text into the target language.
+        // ─────────────────────────────────────────────────────────────────
+        console.log('📢 ════════════════════════════════════════════════════');
+        console.log('📢 [TRANSLATION INPUT] Text entering OpenAI for translation:');
+        console.log(`📢 [TRANSLATION INPUT] "${finalTranscript}"`);
+        console.log(`📢 [TRANSLATION INPUT] Length: ${finalTranscript.length} chars | Words: ${finalTranscript.trim().split(/\s+/).length}`);
+        console.log('📢 ════════════════════════════════════════════════════');
+
         console.log('= [DataChannel] Transcript completed:', transcriptRef.current);
         
         // Save for audio recording (will be used when MediaRecorder stops)
@@ -263,6 +275,8 @@ export function useRealtimeVoice() {
       }
 
       if (event.type === "conversation.item.input_audio_transcription.delta") {
+        // Log each partial word as Whisper streams it — shows text being built in real-time
+        console.log(`📢 [TRANSLATION INPUT] Whisper streaming: "...${event.delta || ''}"`);
         cbs.onPartialTranscript?.(event.delta || "", event.item_id || "unknown_item");
       }
 
