@@ -188,9 +188,39 @@ export function ChatroomInterface({ roomId, participant, onLeaveRoom }: Chatroom
         }
       }
       
+      if (event.type === 'WAITING_FOR_PARTICIPANT') {
+        console.log('⏳ [ChatroomInterface] Waiting for other participant to join');
+        toast.info('Waiting for participant', {
+          description: 'Waiting for the other participant to join...',
+          duration: 5000
+        });
+      }
+      
       if (event.type === 'translation_ready') {
-        console.log(' [ChatroomInterface] Translation session is ready with 2 participants!');
-        toast.success('Translation ready! Both participants connected.');
+        console.log('✅ ═══════════════════════════════════════════════════════');
+        console.log('✅ [ChatroomInterface] Translation session is ready with 2 participants!');
+        console.log('✅ [ChatroomInterface] Initializing audio session now');
+        console.log('✅ ═══════════════════════════════════════════════════════');
+        
+        // Initialize audio session now that both users are present
+        initAudioSession();
+        
+        toast.success('Connected — translation is live', {
+          description: 'Both participants connected. You can now start speaking.',
+          duration: 3000
+        });
+      }
+      
+      if (event.type === 'PARTICIPANT_LEFT') {
+        console.log('⚠️ [ChatroomInterface] Other participant left the room');
+        
+        // Pause audio session
+        pauseAudioSession();
+        
+        toast.warning('Participant disconnected', {
+          description: 'Other participant disconnected. Waiting for them to rejoin...',
+          duration: 5000
+        });
       }
       
       if (event.type === 'SPEECH_TRANSCRIPT') {
@@ -328,6 +358,9 @@ export function ChatroomInterface({ roomId, participant, onLeaveRoom }: Chatroom
     status,
     sessionState,
     isVoiceReady,
+    bothUsersReady,
+    initAudioSession,
+    pauseAudioSession,
     startRoomListening,
     stopRoomListening,
     isListening,
@@ -1040,16 +1073,24 @@ export function ChatroomInterface({ roomId, participant, onLeaveRoom }: Chatroom
                 
                 <button
                   onClick={handleMicToggle}
-                  disabled={!isVoiceReady || !isConnected || !otherParticipant}
+                  disabled={!bothUsersReady || !isVoiceReady || !isConnected || !otherParticipant}
+                  title={!bothUsersReady ? 'Waiting for other participant...' : ''}
                   className={`relative z-10 flex-1 flex items-center justify-center gap-3 px-6 py-4 rounded-lg border-2 transition-all text-base font-medium ${
-                    isMuted
+                    !bothUsersReady
+                      ? 'border-border bg-muted text-muted-foreground cursor-not-allowed opacity-60'
+                      : isMuted
                       ? 'border-border bg-secondary hover:bg-muted text-muted-foreground hover:scale-[1.02] active:scale-95'
                       : isListening || vad.isSpeaking
                         ? 'border-primary/40 bg-primary text-primary-foreground shadow-lg shadow-primary/20'
                         : 'border-primary bg-primary/10 text-primary hover:bg-primary/20'
                   } disabled:opacity-50 disabled:cursor-not-allowed`}
                 >
-                  {isMuted ? (
+                  {!bothUsersReady ? (
+                    <>
+                      <Loader2 className="w-5 h-5 animate-spin" />
+                      <span>Waiting for other participant...</span>
+                    </>
+                  ) : isMuted ? (
                     <>
                       <MicOff className="w-5 h-5" />
                       <span>Click to Unmute & Speak</span>

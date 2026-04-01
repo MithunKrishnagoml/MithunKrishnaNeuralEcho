@@ -485,6 +485,17 @@ wss.on('connection', (ws, req) => {
         // NOTE: OpenAI connection is handled directly via WebRTC on the frontend
         // Backend only relays AI_AUDIO_CHUNK and messages between participants
 
+        // If this is the first participant, send waiting message
+        if (translationSession.participants.size === 1) {
+          ws.send(JSON.stringify({
+            type: 'WAITING_FOR_PARTICIPANT',
+            message: 'Waiting for the other participant to join...',
+            sessionId,
+            participantCount: 1
+          }));
+          console.log(`⏳ Session ${sessionId} waiting for second participant`);
+        }
+
         // Notify successful join
         ws.send(JSON.stringify({ 
           type: 'USER_JOINED_ROOM', 
@@ -522,7 +533,7 @@ wss.on('connection', (ws, req) => {
         // Notify participants once both peers are connected.
         // Translation/TTS is handled on the client WebRTC->OpenAI path.
         if (translationSession.participants.size === 2) {
-          console.log(`=��� Session ${sessionId} now has 2 participants! Ready for relay-only streaming.`);
+          console.log(`=��� Session ${sessionId} now has 2 participants! Ready for translation.`);
           
           // Notify all participants that translation is ready
           for (const [currentUserId, participant] of translationSession.participants.entries()) {
@@ -533,7 +544,7 @@ wss.on('connection', (ws, req) => {
               
               participant.socket.send(JSON.stringify({ 
                 type: 'translation_ready',
-                message: 'Translation session is now active with 2 participants',
+                message: 'Both participants connected. Translation is live.',
                 participantCount: 2,
                 otherParticipant: otherParticipant ? {
                   id: otherParticipant[0],
@@ -1092,6 +1103,23 @@ function cleanupConnection(ws) {
   const translationSession = translationSessions.get(sessionId);
   if (translationSession) {
     translationSession.removeParticipant(userId);
+    
+    // Notify remaining participant that other user left
+    if (translationSession.participants.size === 1) {
+      console.log(`⚠️ Participant ${userId} left session ${sessionId}. Notifying remaining participant.`);
+      
+      for (const participant of translationSession.participants.values()) {
+        if (participant.socket?.readyState === WebSocket.OPEN) {
+          participant.socket.send(JSON.stringify({
+            type: 'PARTICIPANT_LEFT',
+            message: 'Other participant disconnected. Waiting for them to rejoin...',
+            sessionId,
+            leftUserId: userId,
+            participantCount: 1
+          }));
+        }
+      }
+    }
     
     // Remove empty translation sessions
     if (translationSession.participants.size === 0) {

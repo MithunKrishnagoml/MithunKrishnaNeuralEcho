@@ -60,6 +60,7 @@ export function useRoomTranslation({
   const processedMessagesRef = useRef<Set<string>>(new Set());
   const isInitializedRef = useRef(false);
   const audioPlayerRef = useRef<PCM16Player | null>(null);
+  const bothUsersReadyRef = useRef(false); // Gate for OpenAI session initialization
 
   useEffect(() => {
     audioPlayerRef.current = new PCM16Player();
@@ -156,12 +157,13 @@ export function useRoomTranslation({
     };
   }, [participant.language, sendAudioChunk, sendAIAudioChunk, sendPartialTranscript, sendTranslationDelta, sendVoiceActivity, setRealtimeStreamingCallbacks]);
 
-  // Initialize voice session when room is ready
+  // Initialize voice session when room is ready AND both users are present
+  // This is controlled by the translation_ready event from backend
   useEffect(() => {
     if (isConnected && !isInitializedRef.current) {
-      console.log('🔧 [Room Translation] Initializing voice session for room:', roomId);
+      console.log('🔧 [Room Translation] Connected to room:', roomId);
       console.log('🔧 [Room Translation] Participant language:', participant.language);
-      console.log('🔧 [Room Translation] Current sessionState:', sessionState);
+      console.log('⏳ [Room Translation] Waiting for translation_ready event before initializing OpenAI session');
       
       // Clear any existing history first
       clearHistory();
@@ -180,15 +182,11 @@ export function useRoomTranslation({
       // Set the current participant as the active speaker
       setActiveSpeakerId(0);
       
-      // Initialize the voice session with push-to-talk mode
-      // setVoiceModeAndInit will now properly initialize even when disconnected
-      setTimeout(() => {
-        console.log('🔧 [Room Translation] Calling setVoiceModeAndInit to initialize WebRTC session');
-        setVoiceModeAndInit('push-to-talk');
-        isInitializedRef.current = true;
-      }, 200);
+      // DO NOT initialize OpenAI session yet - wait for translation_ready
+      // setVoiceModeAndInit will be called when translation_ready is received
+      isInitializedRef.current = true;
     }
-  }, [isConnected, roomId, participant.language, setVoiceModeAndInit, updateSpeakerLanguage, setActiveSpeakerId, clearHistory, sessionState]);
+  }, [isConnected, roomId, participant.language, updateSpeakerLanguage, setActiveSpeakerId, clearHistory]);
 
   // Monitor AppContext messages and send to room
   useEffect(() => {
@@ -268,13 +266,61 @@ export function useRoomTranslation({
     lastMessageCountRef.current = appMessages.length;
   }, [appMessages, sendBilingualMessage, participant.language]);
 
+  // Initialize audio session when both users are present (called by translation_ready event)
+  const initAudioSession = useCallback(() => {
+    if (bothUsersReadyRef.current) {
+      console.log('⚠️ [Room Translation] Audio session already initialized, skipping');
+      return;
+    }
+
+    console.log('🎵 ═══════════════════════════════════════════════════════');
+    console.log('🎵 [SESSION] Both users present — initializing audio session');
+    console.log('🎵 [SESSION] Room ID:', roomId);
+    console.log('🎵 [SESSION] Participant:', participant.name, '(', participant.language, ')');
+    console.log('🎵 ═══════════════════════════════════════════════════════');
+
+    bothUsersReadyRef.current = true;
+
+    // Initialize OpenAI session now that both users are present
+    console.log('🔧 [Room Translation] Calling setVoiceModeAndInit to initialize WebRTC session');
+    setVoiceModeAndInit('push-to-talk');
+
+    // Resume audio context (satisfies browser autoplay policy)
+    if (audioPlayerRef.current) {
+      audioPlayerRef.current.resume();
+      console.log('🎵 [Room Translation] Audio player resumed');
+    }
+
+    console.log('✅ [SESSION] Audio session initialized — translation is live');
+  }, [roomId, participant, setVoiceModeAndInit]);
+
+  // Pause audio session when a user leaves (called by PARTICIPANT_LEFT event)
+  const pauseAudioSession = useCallback(() => {
+    console.log('⏸️ [SESSION] Participant left — pausing audio session');
+    bothUsersReadyRef.current = false;
+
+    // Stop listening if currently active
+    if (status === 'listening') {
+      stopListening();
+    }
+
+    console.log('⏸️ [SESSION] Audio session paused — waiting for participant to rejoin');
+  }, [status, stopListening]);
+
   // Room-specific start listening
   const startRoomListening = useCallback(() => {
     console.log('🎤 [Room Translation] startRoomListening called', {
       sessionState,
       isConnected,
+      bothUsersReady: bothUsersReadyRef.current,
       participantId: participant.id
     });
+
+    // Gate: Only allow listening if both users are present
+    if (!bothUsersReadyRef.current) {
+      console.warn('⚠️ [Room Translation] Cannot start listening — waiting for both users');
+      return;
+    }
     
     if (sessionState === 'ready' && isConnected) {
       console.log('✅ [Room Translation] Conditions met, calling startListening()');
@@ -352,6 +398,11 @@ export function useRoomTranslation({
     status,
     sessionState,
     isVoiceReady: sessionState === 'ready',
+    bothUsersReady: bothUsersReadyRef.current,
+    
+    // Session control
+    initAudioSession,
+    pauseAudioSession,
     
     // Room-specific controls
     startRoomListening,
