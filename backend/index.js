@@ -92,6 +92,12 @@ class TranslationSession {
         participant.pendingMessageTimeout = null;
       }
       
+      // Clear silence timer
+      if (participant.silenceTimer) {
+        clearTimeout(participant.silenceTimer);
+        participant.silenceTimer = null;
+      }
+      
       // Clear pending message
       participant.pendingMessage = null;
     }
@@ -244,12 +250,7 @@ async function createOpenAISession(inputLang, outputLang) {
             model: 'whisper-1', 
             language: inputLang 
           },
-          turn_detection: {
-            type: 'server_vad',
-            threshold: 0.4,
-            prefix_padding_ms: 200,
-            silence_duration_ms: 400
-          }
+          turn_detection: null  // CRITICAL: Disable auto-response to prevent hallucination
         }
       }));
       
@@ -1183,6 +1184,35 @@ wss.on('connection', (ws, req) => {
           type: 'input_audio_buffer.append',
           audio: audioData
         }));
+        
+        // Track last audio time for silence detection
+        participant.lastAudioTime = Date.now();
+        
+        // Clear existing silence timer
+        if (participant.silenceTimer) {
+          clearTimeout(participant.silenceTimer);
+        }
+        
+        // Set new silence timer - commit audio buffer after 500ms of silence
+        participant.silenceTimer = setTimeout(() => {
+          if (participant.openaiWs?.readyState === WebSocket.OPEN) {
+            // Commit the audio buffer and trigger response
+            participant.openaiWs.send(JSON.stringify({
+              type: 'input_audio_buffer.commit'
+            }));
+            
+            // Create response to trigger translation
+            participant.openaiWs.send(JSON.stringify({
+              type: 'response.create',
+              response: {
+                modalities: ['text', 'audio'],
+                instructions: 'Translate the speech you just heard.'
+              }
+            }));
+            
+            console.log(`🎤 [VAD] Speech ended for ${userId}, triggering translation`);
+          }
+        }, 500);
       }
 
     } catch (error) {
