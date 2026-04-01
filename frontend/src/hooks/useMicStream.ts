@@ -15,9 +15,23 @@ export function useMicStream({ onAudioData, enabled }: UseMicStreamOptions) {
   const workletRef = useRef<AudioWorkletNode | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const isStartingRef = useRef<boolean>(false);
+  const isStoppingRef = useRef<boolean>(false);
 
   const start = useCallback(async () => {
-    if (audioCtxRef.current) return; // already running
+    // Prevent concurrent start operations
+    if (isStartingRef.current) {
+      console.log('🎤 [MicStream] Start already in progress, skipping');
+      return;
+    }
+    
+    // Check if already running with a valid context
+    if (audioCtxRef.current && audioCtxRef.current.state !== 'closed') {
+      console.log('🎤 [MicStream] Already running');
+      return; // already running
+    }
+
+    isStartingRef.current = true;
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -33,6 +47,11 @@ export function useMicStream({ onAudioData, enabled }: UseMicStreamOptions) {
       streamRef.current = stream;
       const ctx = new AudioContext({ sampleRate: 24000 });
       audioCtxRef.current = ctx;
+
+      // Ensure context is running before adding worklet
+      if (ctx.state === 'suspended') {
+        await ctx.resume();
+      }
 
       await ctx.audioWorklet.addModule('/mic-input-processor.js');
       const worklet = new AudioWorkletNode(ctx, 'mic-input-processor');
@@ -59,22 +78,53 @@ export function useMicStream({ onAudioData, enabled }: UseMicStreamOptions) {
       console.log('🎤 [MicStream] Started');
     } catch (error) {
       console.error('❌ [MicStream] Failed to start:', error);
+      // Clean up on error
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(t => t.stop());
+        streamRef.current = null;
+      }
+      if (audioCtxRef.current) {
+        audioCtxRef.current.close().catch(() => {});
+        audioCtxRef.current = null;
+      }
+    } finally {
+      isStartingRef.current = false;
     }
   }, [onAudioData]);
 
   const stop = useCallback(() => {
-    if (workletRef.current) {
-      workletRef.current.port.postMessage({ type: 'STOP_CAPTURE' });
-      workletRef.current.disconnect();
-      workletRef.current = null;
+    // Prevent concurrent stop operations
+    if (isStoppingRef.current) {
+      console.log('🎤 [MicStream] Stop already in progress, skipping');
+      return;
     }
-    sourceRef.current?.disconnect();
-    streamRef.current?.getTracks().forEach(t => t.stop());
-    audioCtxRef.current?.close();
-    audioCtxRef.current = null;
-    streamRef.current = null;
-    sourceRef.current = null;
-    console.log('🎤 [MicStream] Stopped');
+    
+    isStoppingRef.current = true;
+    
+    try {
+      if (workletRef.current) {
+        workletRef.current.port.postMessage({ type: 'STOP_CAPTURE' });
+        workletRef.current.disconnect();
+        workletRef.current = null;
+      }
+      if (sourceRef.current) {
+        sourceRef.current.disconnect();
+        sourceRef.current = null;
+      }
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(t => t.stop());
+        streamRef.current = null;
+      }
+      if (audioCtxRef.current) {
+        audioCtxRef.current.close().catch(() => {
+          // Ignore close errors
+        });
+        audioCtxRef.current = null;
+      }
+      console.log('🎤 [MicStream] Stopped');
+    } finally {
+      isStoppingRef.current = false;
+    }
   }, []);
 
   useEffect(() => {
