@@ -13,6 +13,13 @@ const Chatroom = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [prefilledRoomId, setPrefilledRoomId] = useState<string>('');
 
+  // ✅ DEBUG: Confirm we're on the chatroom page
+  console.log('═══════════════════════════════════════════════════════');
+  console.log('🎯 [ROUTE] /chatroom page loaded');
+  console.log('🎯 [ROUTE] Current room:', currentRoom || 'none (showing join/create UI)');
+  console.log('🎯 [ROUTE] Participant:', participant?.id || 'none');
+  console.log('═══════════════════════════════════════════════════════');
+
   // Check for room ID in URL parameters
   useEffect(() => {
     const joinRoomId = searchParams.get('join');

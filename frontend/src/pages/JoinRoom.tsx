@@ -20,6 +20,13 @@ const JoinRoom = () => {
   const { roomId } = useParams<{ roomId: string }>();
   const navigate = useNavigate();
 
+  // ✅ DEBUG: Confirm we're on the join room page
+  console.log('═══════════════════════════════════════════════════════');
+  console.log('🎯 [ROUTE] /join/:roomId page loaded');
+  console.log('🎯 [ROUTE] Room ID from URL:', roomId || 'MISSING');
+  console.log('🎯 [ROUTE] Full URL:', window.location.href);
+  console.log('═══════════════════════════════════════════════════════');
+
   const [name, setName] = useState('');
   const [language, setLanguage] = useState<'en-US' | 'fr-CA'>(detectLanguage);
   const [isJoining, setIsJoining] = useState(false);

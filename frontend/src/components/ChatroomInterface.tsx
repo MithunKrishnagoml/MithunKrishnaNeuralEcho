@@ -22,7 +22,6 @@ import {
   ScrollText
 } from 'lucide-react';
 import { ChatroomParticipant, ChatroomMessage } from '@/types/chatroom';
-import { useAppState } from '@/contexts/AppContext';
 import { useChatroomConnection } from '@/hooks/useChatroomConnection';
 import { useRoomTranslation } from '@/hooks/useRoomTranslation';
 import { useStreamingState } from '@/hooks/useStreamingState';
@@ -55,6 +54,14 @@ const normalizeLang = (lang?: string) => (lang || '').toLowerCase().split('-')[0
 const isSameLanguage = (a?: string, b?: string) => normalizeLang(a) === normalizeLang(b);
 
 export function ChatroomInterface({ roomId, participant, onLeaveRoom }: ChatroomInterfaceProps) {
+  // ✅ DEBUG: Confirm we're in CHATROOM mode
+  console.log('═══════════════════════════════════════════════════════');
+  console.log('🎯 [MODE] CHATROOM MODE ACTIVE');
+  console.log('🎯 [MODE] Room ID:', roomId);
+  console.log('🎯 [MODE] Participant:', participant.id, participant.name);
+  console.log('🎯 [MODE] Using: useChatroomConnection (NOT useRealtimeVoice)');
+  console.log('═══════════════════════════════════════════════════════');
+  
   const [isMuted, setIsMuted] = useState(true); // Start muted by default
   const [currentTranscript, setCurrentTranscript] = useState('');
   const [incomingTranscript, setIncomingTranscript] = useState(''); // Translated transcript from other speaker
@@ -373,9 +380,8 @@ export function ChatroomInterface({ roomId, participant, onLeaveRoom }: Chatroom
     otherParticipant
   });
 
-  // Get actual audio level from the voice hook
-  const { currentDbLevel, dbThreshold } = useAppState();
-  const audioLevel = currentDbLevel || -100;
+  // Audio level for UI display (not used for VAD - backend manages that)
+  const [audioLevel, setAudioLevel] = useState(-100);
 
   // Voice Activity Detection - removed (backend manages this now)
   // Mic auto-starts when translation_ready fires
