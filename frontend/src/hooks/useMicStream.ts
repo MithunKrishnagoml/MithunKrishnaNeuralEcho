@@ -18,6 +18,16 @@ export function useMicStream({ onAudioData, onCommitAudio, enabled }: UseMicStre
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const isStartingRef = useRef<boolean>(false);
   const isStoppingRef = useRef<boolean>(false);
+  
+  // ✅ FIX: Use refs for callbacks to prevent restart loops
+  const onAudioDataRef = useRef(onAudioData);
+  const onCommitAudioRef = useRef(onCommitAudio);
+  
+  // Update refs when callbacks change
+  useEffect(() => {
+    onAudioDataRef.current = onAudioData;
+    onCommitAudioRef.current = onCommitAudio;
+  }, [onAudioData, onCommitAudio]);
 
   const start = useCallback(async () => {
     // Prevent concurrent start operations
@@ -67,11 +77,11 @@ export function useMicStream({ onAudioData, onCommitAudio, enabled }: UseMicStre
           uint8.forEach(b => binary += String.fromCharCode(b));
           const base64 = btoa(binary);
           
-          // Send immediately for low latency
-          onAudioData(base64);
+          // Send immediately for low latency - use ref to avoid restart loops
+          onAudioDataRef.current(base64);
         } else if (e.data.type === 'COMMIT_AUDIO') {
           // Silence detected - signal backend to commit audio buffer
-          onCommitAudio?.();
+          onCommitAudioRef.current?.();
         }
       };
 
@@ -98,7 +108,7 @@ export function useMicStream({ onAudioData, onCommitAudio, enabled }: UseMicStre
     } finally {
       isStartingRef.current = false;
     }
-  }, [onAudioData, onCommitAudio]);
+  }, []); // ✅ FIX: Empty deps - callbacks are in refs
 
   const stop = useCallback(() => {
     // Prevent concurrent stop operations
