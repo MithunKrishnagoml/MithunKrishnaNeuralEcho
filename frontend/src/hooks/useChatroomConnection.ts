@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { ChatroomEvent, ChatroomParticipant, ChatroomMessage, Chatroom } from '@/types/chatroom';
 import { reportNetworkError, reportWebSocketError } from '@/utils/StreamingErrorHandler';
-import { useTranslationAudio } from './useTranslationAudio';
+import { useLowLatencyAudio } from './useLowLatencyAudio';
 import { useMicStream } from './useMicStream';
 
 interface UseChatroomConnectionProps {
@@ -23,8 +23,8 @@ export function useChatroomConnection({ roomId, participant, onEvent }: UseChatr
   const wsRef = useRef<WebSocket | null>(null);
   const connectionAttemptRef = useRef<boolean>(false);
 
-  // Use new translation audio hook instead of PCM16Player
-  const translationAudio = useTranslationAudio();
+  // Use new low-latency audio hook for <500ms latency
+  const lowLatencyAudio = useLowLatencyAudio();
 
   // Setup mic streaming with commit signal support
   useMicStream({
@@ -52,9 +52,9 @@ export function useChatroomConnection({ roomId, participant, onEvent }: UseChatr
 
   // Handle user gesture for autoplay policy - trigger on any user interaction
   const handleUserGesture = useCallback(async () => {
-    await translationAudio.resume();
-    console.log('🎵 User gesture handled for TranslationAudio');
-  }, [translationAudio]);
+    await lowLatencyAudio.resume();
+    console.log('🎵 User gesture handled for LowLatencyAudio');
+  }, [lowLatencyAudio]);
 
   // Add multiple event listeners to handle autoplay policy
   useEffect(() => {
@@ -269,9 +269,14 @@ export function useChatroomConnection({ roomId, participant, onEvent }: UseChatr
             // Backend guarantees this is translated audio for this participant only
             if (!data.audioData || !data.chunkId) break;
 
-            translationAudio.resume();
-            // Pass timestamp for speech boundary detection
-            translationAudio.enqueueChunk(data.audioData, data.chunkId, data.timestamp);
+            // ✅ CRITICAL: Use low-latency audio player for <500ms latency
+            lowLatencyAudio.resume();
+            lowLatencyAudio.enqueueChunk(
+              data.audioData, 
+              data.chunkId, 
+              data.timestamp,
+              data.speakerId || 'default'
+            );
             break;
           }
 
@@ -560,8 +565,8 @@ export function useChatroomConnection({ roomId, participant, onEvent }: UseChatr
     // Stop mic streaming
     setMicEnabled(false);
     
-    // Flush audio queue
-    translationAudio.flush();
+    // Clear audio queue
+    lowLatencyAudio.clearQueue();
     
     if (wsRef.current) {
       wsRef.current.close(1000, 'User disconnected'); // Normal closure
@@ -569,7 +574,7 @@ export function useChatroomConnection({ roomId, participant, onEvent }: UseChatr
     }
     setIsConnected(false);
     setOtherParticipant(null);
-  }, [translationAudio]);
+  }, [lowLatencyAudio]);
 
   const sendEvent = useCallback((event: any) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
