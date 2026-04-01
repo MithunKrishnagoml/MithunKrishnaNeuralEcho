@@ -213,7 +213,6 @@ export function TranslationPanel({ langCode }: TranslationPanelProps) {
                     ? "Speaking... (AI Processing)"
                     : "Unmuted - Ready to translate"}
           </p>
-          </p>
         </div>
       )}
 
