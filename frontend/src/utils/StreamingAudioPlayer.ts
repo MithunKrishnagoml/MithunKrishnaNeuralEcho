@@ -41,7 +41,7 @@ export class StreamingAudioPlayer {
 
   constructor(options: StreamingAudioPlayerOptions = {}) {
     this.options = {
-      sampleRate: options.sampleRate || 24000,
+      sampleRate: 24000, // ✅ MUST be 24000 Hz for OpenAI Realtime API PCM16 format
       maxQueueSize: options.maxQueueSize || 48000 * 10, // 10 seconds at 48kHz
       debug: options.debug || false,
       onPlaybackStart: options.onPlaybackStart || (() => {}),
@@ -250,6 +250,7 @@ export class StreamingAudioPlayer {
 
   /**
    * Process a single audio chunk
+   * ✅ BUG FIX #2: Direct PCM16 decoding - no more decodeAudioData failures
    */
   private async processChunk(chunk: AudioChunk): Promise<void> {
     if (!this.audioContext || !this.workletNode || this.isDestroyed) {
@@ -260,96 +261,37 @@ export class StreamingAudioPlayer {
       // CRITICAL: Resume AudioContext before processing any chunk
       await this.ensureAudioContextResumed();
 
-      let samples: Float32Array;
-
-      // Check if this is PCM data (from real-time streaming) or WebM blob (fallback)
-      if (chunk.sequenceNumber !== undefined) {
-        // ✅ REAL-TIME PCM STREAMING - Play immediately
-        if (this.options.debug) {
-          console.log('[StreamingAudioPlayer] Real-time PCM chunk:', chunk.id, 'seq:', chunk.sequenceNumber);
-        }
-        
-        // Decode base64 to Int16 PCM
-        const binaryString = atob(chunk.data);
-        const bytes = new Uint8Array(binaryString.length);
-        for (let i = 0; i < binaryString.length; i++) {
-          bytes[i] = binaryString.charCodeAt(i);
-        }
-        
-        // Create Int16Array from bytes (little-endian)
-        const int16Array = new Int16Array(bytes.buffer, bytes.byteOffset, bytes.length / 2);
-        
-        // Convert Int16 PCM to Float32 samples
-        const float32Samples = new Float32Array(int16Array.length);
-        for (let i = 0; i < int16Array.length; i++) {
-          const sample = int16Array[i];
-          float32Samples[i] = sample < 0 ? sample / 32768.0 : sample / 32767.0;
-        }
-        
-        // 🚀 SEND DIRECTLY TO WORKLET - NO BUFFERING
-        this.workletNode.port.postMessage({
-          type: 'ADD_SAMPLES',
-          data: float32Samples,
-          responseId: chunk.responseId
-        });
-        
-        if (this.options.debug) {
-          console.log('[StreamingAudioPlayer] Sent', float32Samples.length, 'samples to worklet (real-time streaming)');
-        }
-        return;
-        
-      } else {
-        // This is WebM blob data (fallback path) - play immediately like TRANSLATED_AUDIO
-        console.log('[StreamingAudioPlayer] Processing WebM blob chunk:', chunk.id);
-        
-        // Decode base64 to ArrayBuffer
-        const binaryString = atob(chunk.data);
-        const bytes = new Uint8Array(binaryString.length);
-        for (let i = 0; i < binaryString.length; i++) {
-          bytes[i] = binaryString.charCodeAt(i);
-        }
-
-        // Decode audio data to AudioBuffer
-        let audioBuffer;
-        try {
-          audioBuffer = await this.audioContext.decodeAudioData(bytes.buffer.slice(0));
-        } catch (decodeError) {
-          console.error('[StreamingAudioPlayer] decodeAudioData FAILED:', {
-            chunkId: chunk.id,
-            dataSize: bytes.length,
-            error: decodeError.message,
-            errorName: decodeError.name,
-            audioContextState: this.audioContext.state,
-            sampleRate: this.audioContext.sampleRate
-          });
-          this.options.onError(new Error(`Audio decode failed for chunk ${chunk.id}: ${decodeError.message}`));
-          return;
-        }
-
-        // Convert AudioBuffer to Float32Array samples
-        if (audioBuffer.numberOfChannels === 1) {
-          samples = new Float32Array(audioBuffer.getChannelData(0));
-        } else {
-          const leftChannel = audioBuffer.getChannelData(0);
-          const rightChannel = audioBuffer.getChannelData(1) || leftChannel;
-          samples = new Float32Array(leftChannel.length);
-          
-          for (let i = 0; i < leftChannel.length; i++) {
-            samples[i] = (leftChannel[i] + rightChannel[i]) / 2;
-          }
-        }
-        
-        // Send WebM blob samples to worklet immediately
-        const samplesCopy = new Float32Array(samples);
-        this.workletNode.port.postMessage({
-          type: 'ADD_SAMPLES',
-          data: samplesCopy,
-          responseId: chunk.responseId
-        });
-        
-        if (this.options.debug) {
-          console.log('[StreamingAudioPlayer] Added', samples.length, 'samples to worklet for response:', chunk.responseId);
-        }
+      // ✅ ALL AUDIO IS RAW PCM16 - Decode directly without decodeAudioData
+      if (this.options.debug) {
+        console.log('[StreamingAudioPlayer] Processing PCM16 chunk:', chunk.id);
+      }
+      
+      // Decode base64 → raw bytes
+      const binaryString = atob(chunk.data);
+      const bytes = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+      
+      // Interpret as signed 16-bit PCM (little-endian)
+      const int16Array = new Int16Array(bytes.buffer, bytes.byteOffset, bytes.length / 2);
+      
+      // Convert to Float32 for Web Audio API
+      const float32Samples = new Float32Array(int16Array.length);
+      for (let i = 0; i < int16Array.length; i++) {
+        const sample = int16Array[i];
+        float32Samples[i] = sample < 0 ? sample / 32768.0 : sample / 32767.0;
+      }
+      
+      // Send directly to worklet for gapless playback
+      this.workletNode.port.postMessage({
+        type: 'ADD_SAMPLES',
+        data: float32Samples,
+        responseId: chunk.responseId
+      });
+      
+      if (this.options.debug) {
+        console.log('[StreamingAudioPlayer] Sent', float32Samples.length, 'PCM16 samples to worklet');
       }
 
       // Trigger playback start callback on first chunk

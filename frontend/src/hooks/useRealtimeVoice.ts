@@ -11,9 +11,9 @@ const createSessionViaBackend = async (config: SessionConfig) => {
   
   const turnDetection = config.voiceMode === "hands-free" ? {
     type: "server_vad",
-    threshold: 0.3, // Lower threshold for better sensitivity
-    prefix_padding_ms: 100, // Minimal padding
-    silence_duration_ms: 200 // Quick response
+    threshold: 0.5, // Higher threshold - only triggers on clear speech
+    prefix_padding_ms: 300, // Captures the very start of each utterance
+    silence_duration_ms: 500 // Waits longer before cutting - gets full sentences
   } : null;
 
   const response = await fetch(REALTIME_SESSION_URL, {
@@ -22,16 +22,16 @@ const createSessionViaBackend = async (config: SessionConfig) => {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      instructions: config.instructions,
+      instructions: config.instructions + "\n\nTranscribe exactly what is said. Do not correct grammar. Do not add punctuation that was not implied by speech. Do not skip filler words like 'um', 'uh', 'er'. Do not combine two separate utterances into one sentence.",
       turn_detection: turnDetection,
-      voice: config.voice || "ballad",
+      voice: config.voice || "shimmer", // Changed from 'ballad' to 'shimmer' for warmer, more natural voice
       modalities: ['text', 'audio'],
       input_audio_transcription: {
         model: "whisper-1",
         language: config.language || "en" // Always pass language hint to prevent hallucination
       },
-      temperature: 0.6,
-      max_response_output_tokens: 2048,
+      temperature: 0.2, // Lower temperature for more literal transcription and translation
+      max_response_output_tokens: 512, // Reduced from 2048 - forces concise, direct translation
       input_audio_format: 'pcm16',
       output_audio_format: 'pcm16',
     }),
@@ -610,20 +610,21 @@ export function useRealtimeVoice() {
                 const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
                 console.log('📦 [FALLBACK RECORDER] Created blob:', audioBlob.size, 'bytes, type:', audioBlob.type);
                 
-                // Always send fallback audio - real-time streaming may have failed
+                // ✅ BUG FIX #3: Send audio immediately without waiting for transcript
+                // Audio relay must not be gated on transcript availability
                 const reader = new FileReader();
                 reader.onloadend = () => {
                   const base64Audio = (reader.result as string).split(',')[1];
                   console.log('📦 [FALLBACK RECORDER] Base64 encoded length:', base64Audio.length);
                   const finalizedTurn = finalizedTurnRef.current;
-                  const syncedTranscript = finalizedTurn?.transcript || recordingTranscriptRef.current;
-                  const syncedTranslation = finalizedTurn?.translation || recordingResponseRef.current;
+                  const syncedTranscript = finalizedTurn?.transcript || recordingTranscriptRef.current || '';
+                  const syncedTranslation = finalizedTurn?.translation || recordingResponseRef.current || '';
                   
-                  // Send translated audio to room via callback using SAVED recording values
-                  if (callbacksRef.current?.onTranslatedAudio && syncedTranscript && syncedTranslation) {
-                    console.log('📦 [FALLBACK RECORDER] Sending translated audio to room with saved transcript/translation');
-                    console.log('📝 [AUDIO SYNC] Using transcript:', syncedTranscript);
-                    console.log('📝 [AUDIO SYNC] Using translation:', syncedTranslation);
+                  // Send translated audio to room via callback - ALWAYS send, even if transcript is empty
+                  if (callbacksRef.current?.onTranslatedAudio) {
+                    console.log('📦 [FALLBACK RECORDER] Sending translated audio to room');
+                    console.log('📝 [AUDIO SYNC] Using transcript:', syncedTranscript || '(empty)');
+                    console.log('📝 [AUDIO SYNC] Using translation:', syncedTranslation || '(empty)');
                     callbacksRef.current.onTranslatedAudio(
                       base64Audio, 
                       syncedTranscript,
@@ -635,12 +636,7 @@ export function useRealtimeVoice() {
                     recordingResponseRef.current = "";
                     finalizedTurnRef.current = null;
                   } else {
-                    console.warn('📦 [FALLBACK RECORDER] Cannot send audio - missing callback or transcript/translation');
-                    console.warn('📦 [FALLBACK RECORDER] Debug info:', {
-                      hasCallback: !!callbacksRef.current?.onTranslatedAudio,
-                      syncedTranscript,
-                      syncedTranslation
-                    });
+                    console.warn('📦 [FALLBACK RECORDER] Cannot send audio - missing callback');
                   }
                 };
                 reader.readAsDataURL(audioBlob);

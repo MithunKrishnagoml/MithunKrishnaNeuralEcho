@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { ChatroomEvent, ChatroomParticipant, ChatroomMessage, Chatroom } from '@/types/chatroom';
 import { reportNetworkError, reportWebSocketError } from '@/utils/StreamingErrorHandler';
-import { StreamingAudioPlayer } from '@/utils/StreamingAudioPlayer';
+import { PCM16Player } from '@/utils/PCM16Player';
 
 interface UseChatroomConnectionProps {
   roomId: string;
@@ -20,24 +20,12 @@ export function useChatroomConnection({ roomId, participant, onEvent }: UseChatr
   const [lastTranslation, setLastTranslation] = useState<string>('');
   const wsRef = useRef<WebSocket | null>(null);
   const connectionAttemptRef = useRef<boolean>(false);
-  const translatedAudioPlayerRef = useRef<StreamingAudioPlayer | null>(null);
+  const translatedAudioPlayerRef = useRef<PCM16Player | null>(null);
 
-  // Initialize translated audio player
+  // Initialize translated audio player with PCM16Player
   useEffect(() => {
-    translatedAudioPlayerRef.current = new StreamingAudioPlayer({
-      sampleRate: 24000,
-      maxQueueSize: 48000 * 10, // 10 seconds
-      debug: true, // Enable debug temporarily
-      onError: (error) => {
-        console.error('❌ Translated audio player error:', error);
-      },
-      onPlaybackStart: () => {
-        console.log('▶️ Translated audio playback started');
-      },
-      onPlaybackEnd: () => {
-        console.log('⏹️ Translated audio playback ended');
-      }
-    });
+    translatedAudioPlayerRef.current = new PCM16Player();
+    console.log('🎵 [PCM16Player] Initialized for translated audio playback');
 
     return () => {
       translatedAudioPlayerRef.current?.dispose();
@@ -48,8 +36,8 @@ export function useChatroomConnection({ roomId, participant, onEvent }: UseChatr
   // Handle user gesture for autoplay policy - trigger on any user interaction
   const handleUserGesture = useCallback(async () => {
     if (translatedAudioPlayerRef.current) {
-      await translatedAudioPlayerRef.current.handleUserGesture();
-      console.log('🎵 User gesture handled for translated audio player');
+      await translatedAudioPlayerRef.current.resume();
+      console.log('🎵 User gesture handled for PCM16Player');
     }
   }, []);
 
@@ -261,18 +249,9 @@ export function useChatroomConnection({ roomId, participant, onEvent }: UseChatr
             console.log('🎵 [AUDIO_CHUNK] Player ready:', !!translatedAudioPlayerRef.current);
             console.log('🎵 ═══════════════════════════════════════════════════════');
             
-            // ✅ CRITICAL FIX: Play AI audio from OTHER user's session
-            // If speakerId === my ID, this is MY AI translating MY speech → DON'T play (I hear my own translation)
-            // If speakerId !== my ID, this is OTHER user's AI translating THEIR speech → PLAY (I hear their translation)
-            if (data.speakerId && data.speakerId === participant.id) {
-              console.warn('⚠️ [AUDIO_CHUNK] FILTERED OUT - This is my own AI translation, not playing');
-              break;
-            }
-            
-            // Log if this is AI audio from other user
-            if (data.participantId === 'ai-agent') {
-              console.log('🤖 [AUDIO_CHUNK] This is AI audio from other user\'s translation - PLAYING ✅');
-            }
+            // ✅ BUG FIX #1: REMOVED speaker ID filter - both users must hear AI translation
+            // The speaker SHOULD hear their own words translated back to them
+            // That is the core product feature - real-time translation playback
             
             if (!data.audioData) {
               console.error('❌ [AUDIO_CHUNK] FAILED - No audioData in event');
@@ -285,22 +264,14 @@ export function useChatroomConnection({ roomId, participant, onEvent }: UseChatr
             }
             
             try {
-              // Force user gesture handling when we receive audio
-              translatedAudioPlayerRef.current.handleUserGesture();
+              // Resume audio context on first chunk (autoplay policy)
+              translatedAudioPlayerRef.current.resume();
               
-              // Convert base64 audio to audio chunk format
-              const chunk = {
-                id: data.chunkId || `chunk_${Date.now()}`,
-                data: data.audioData,
-                timestamp: data.timestamp || Date.now(),
-                sequenceNumber: 0, // Not provided in AUDIO_CHUNK type
-                responseId: data.responseId || 'unknown'
-              };
-              
-              translatedAudioPlayerRef.current.addChunk(chunk);
-              console.log('✅ [AUDIO_CHUNK] Successfully added to streaming player:', chunk.id);
+              // Enqueue PCM16 chunk directly - no conversion needed
+              translatedAudioPlayerRef.current.enqueue(data.audioData);
+              console.log('✅ [AUDIO_CHUNK] Successfully enqueued to PCM16Player');
             } catch (error) {
-              console.error('❌ [AUDIO_CHUNK] FAILED to add chunk:', error);
+              console.error('❌ [AUDIO_CHUNK] FAILED to enqueue chunk:', error);
             }
             break;
             
@@ -324,21 +295,15 @@ export function useChatroomConnection({ roomId, participant, onEvent }: UseChatr
             }
             
             try {
-              // Force user gesture handling when we receive audio
-              translatedAudioPlayerRef.current.handleUserGesture();
+              // Resume audio context (autoplay policy)
+              translatedAudioPlayerRef.current.resume();
               
-              const chunk = {
-                id: `translated_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-                data: data.audioData,
-                timestamp: data.timestamp || Date.now(),
-                responseId: 'translated-audio'
-              };
-              
-              translatedAudioPlayerRef.current.addChunk(chunk);
-              console.log('✅ [TRANSLATED_AUDIO] Successfully added to streaming player:', chunk.id);
+              // Enqueue PCM16 chunk directly
+              translatedAudioPlayerRef.current.enqueue(data.audioData);
+              console.log('✅ [TRANSLATED_AUDIO] Successfully enqueued to PCM16Player');
               console.log('🔊 [TRANSLATED_AUDIO] Playing for participant:', participant.id);
             } catch (error) {
-              console.error('❌ [TRANSLATED_AUDIO] FAILED to add chunk:', error);
+              console.error('❌ [TRANSLATED_AUDIO] FAILED to enqueue chunk:', error);
             }
             break;
             
