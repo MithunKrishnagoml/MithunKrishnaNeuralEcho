@@ -188,34 +188,23 @@ export function ChatroomInterface({ roomId, participant, onLeaveRoom }: Chatroom
         }
       }
       
-      if (event.type === 'WAITING_FOR_PARTICIPANT') {
-        console.log('⏳ [ChatroomInterface] Waiting for other participant to join');
-        toast.info('Waiting for participant', {
-          description: 'Waiting for the other participant to join...',
-          duration: 5000
-        });
-      }
+      // Note: WAITING_FOR_PARTICIPANT and PARTICIPANT_LEFT may not be in type definition yet
+      // These are handled by USER_JOINED_ROOM and USER_LEFT_ROOM events
       
       if (event.type === 'translation_ready') {
         console.log('✅ ═══════════════════════════════════════════════════════');
         console.log('✅ [ChatroomInterface] Translation session is ready with 2 participants!');
-        console.log('✅ [ChatroomInterface] Initializing audio session now');
+        console.log('✅ [ChatroomInterface] Mic will auto-start now (backend-managed)');
         console.log('✅ ═══════════════════════════════════════════════════════');
         
-        // Initialize audio session now that both users are present
-        initAudioSession();
-        
         toast.success('Connected — translation is live', {
-          description: 'Both participants connected. You can now start speaking.',
+          description: 'Both participants connected. Start speaking naturally.',
           duration: 3000
         });
       }
       
-      if (event.type === 'PARTICIPANT_LEFT') {
+      if (event.type === 'USER_LEFT_ROOM') {
         console.log('⚠️ [ChatroomInterface] Other participant left the room');
-        
-        // Pause audio session
-        pauseAudioSession();
         
         toast.warning('Participant disconnected', {
           description: 'Other participant disconnected. Waiting for them to rejoin...',
@@ -259,8 +248,7 @@ export function ChatroomInterface({ roomId, participant, onLeaveRoom }: Chatroom
       // Handle AI audio chunks (from OpenAI, relayed by backend)
       if (event.type === 'AI_AUDIO_CHUNK') {
         console.log(`🤖 [AI_AUDIO_CHUNK] Received seq ${event.seq} from ${event.fromParticipant}`);
-        // Play AI audio for ALL participants (both users hear the AI voice)
-        playIncomingAudioChunk(event.audioData, `ai_${event.fromParticipant}_${event.seq}`);
+        // Audio playback handled by useTranslationAudio in useChatroomConnection
       }
 
       if (event.type === 'AUDIO_CHUNK') {
@@ -271,7 +259,7 @@ export function ChatroomInterface({ roomId, participant, onLeaveRoom }: Chatroom
           return;
         }
         addAudioChunk(event.audioData, event.responseId);
-        playIncomingAudioChunk(event.audioData, event.responseId);
+        // Audio playback handled by useTranslationAudio in useChatroomConnection
       }
 
       if (event.type === 'VOICE_ACTIVITY_STARTED') {
@@ -347,41 +335,18 @@ export function ChatroomInterface({ roomId, participant, onLeaveRoom }: Chatroom
         }
       }
       
-      if (event.type === 'USER_LEFT_ROOM') {
-        toast.info('Other participant left the room');
-      }
+      // Note: USER_LEFT_ROOM is already handled above
     }
   });
 
-  // Room-based translation integration
-  const {
-    status,
-    sessionState,
-    isVoiceReady,
-    bothUsersReady,
-    initAudioSession,
-    pauseAudioSession,
-    startRoomListening,
-    stopRoomListening,
-    isListening,
-    isTranslating,
-    localMessages,
-    playIncomingAudioChunk,
-    handleUserGesture: handleRoomUserGesture
-  } = useRoomTranslation({
-    roomId,
+  // Room-based translation integration (simplified - backend manages OpenAI)
+  const roomTranslation = useRoomTranslation({
+    sessionId: roomId,
     participant,
-    sendTranscript,
-    sendTranslatedAudio,
-    sendBilingualMessage,
-    sendPartialTranscript,
-    sendTranslationDelta,
-    sendAudioChunk,
-    sendAudioStreamEnd,
-    sendAIAudioChunk,
-    sendAIAudioEnd,
-    sendVoiceActivity,
-    isConnected
+    onEvent: (event) => {
+      // Additional event handling if needed
+      console.log('🔔 [RoomTranslation] Event:', event.type);
+    }
   });
 
   // Transcript and recording management
@@ -411,41 +376,17 @@ export function ChatroomInterface({ roomId, participant, onLeaveRoom }: Chatroom
   // Get actual audio level from the voice hook
   const { currentDbLevel, dbThreshold } = useAppState();
   const audioLevel = currentDbLevel || -100;
-  const isVoiceRecording = isListening || isTranslating;
 
-  // Voice Activity Detection for hands-free mode
-  const vad = useVoiceActivityDetection(
-    {
-      energyThreshold: 0.015,
-      silenceTimeout: 1500, // 1.5 seconds for mid-sentence pauses
-      minSpeechDuration: 300, // 300ms minimum to avoid noise
-      debug: true,
-    },
-    {
-      onSpeechStart: () => {
-        console.log('🎤 [VAD] Speech started');
-        if (isHandsFreeMode && !isPlayingAudioRef.current && isVoiceReady && otherParticipant) {
-          console.log('🎤 [VAD] Starting room listening (hands-free)');
-          startRoomListening();
-        }
-      },
-      onSpeechEnd: () => {
-        console.log('🎤 [VAD] Speech ended');
-        if (isHandsFreeMode && isListening) {
-          console.log('🎤 [VAD] Stopping room listening (hands-free)');
-          stopRoomListening();
-        }
-      },
-    }
-  );
+  // Voice Activity Detection - removed (backend manages this now)
+  // Mic auto-starts when translation_ready fires
 
   // Initialize audio queue on mount
   useEffect(() => {
-    console.log(' [AUDIO QUEUE] Initializing FifoAudioQueue');
+    console.log('🎵 [AUDIO QUEUE] Initializing FifoAudioQueue');
     audioQueueRef.current = new FifoAudioQueue();
     
     return () => {
-      console.log(' [AUDIO QUEUE] Cleaning up FifoAudioQueue');
+      console.log('🎵 [AUDIO QUEUE] Cleaning up FifoAudioQueue');
       if (audioQueueRef.current) {
         audioQueueRef.current.destroy();
         audioQueueRef.current = null;
@@ -453,121 +394,10 @@ export function ChatroomInterface({ roomId, participant, onLeaveRoom }: Chatroom
     };
   }, []);
 
-  // Toggle mute/unmute - when unmuting, enable hands-free mode
-  const toggleMute = useCallback(async () => {
-    const newMutedState = !isMuted;
-    setIsMuted(newMutedState);
-    
-    if (!newMutedState) {
-      // Unmuting - enable hands-free mode and resume AudioContext
-      setIsHandsFreeMode(true);
-      
-      // Resume AudioContext for autoplay policy
-      if (audioQueueRef.current) {
-        try {
-          await audioQueueRef.current.resume();
-          console.log(' [AUDIO QUEUE] AudioContext resumed on unmute');
-        } catch (error) {
-          console.error(' [AUDIO QUEUE] Failed to resume AudioContext:', error);
-        }
-      }
-      
-      toast.success('Microphone enabled', {
-        description: 'Speak naturally - your voice will be detected automatically',
-      });
-      
-      // Start VAD for hands-free mode
-      try {
-        await vad.start();
-      } catch (error) {
-        console.error('Failed to start VAD:', error);
-        toast.error('Failed to start microphone. Please check microphone permissions.');
-        setIsMuted(true);
-        setIsHandsFreeMode(false);
-      }
-    } else {
-      // Muting - disable hands-free mode
-      setIsHandsFreeMode(false);
-      toast.info('Microphone muted', {
-        description: 'Click the mic button to speak again',
-      });
-      
-      // Stop VAD
-      vad.stop();
-      
-      // Stop any active listening
-      if (isListening) {
-        stopRoomListening();
-      }
-    }
-  }, [isMuted, vad, isListening, stopRoomListening]);
-
-  // Handle incoming audio playback - stop VAD temporarily to avoid echo
-  useEffect(() => {
-    if (streamingState.isOtherSpeaking || isOtherSpeaking) {
-      console.log('🔊 [Audio] Other person speaking, pausing VAD');
-      isPlayingAudioRef.current = true;
-      
-      // If we're currently speaking in hands-free mode, stop
-      if (isHandsFreeMode && isListening) {
-        console.log('🔊 [Audio] Interruption detected - stopping local speech');
-        stopRoomListening();
-      }
-    } else {
-      console.log('🔊 [Audio] Other person stopped speaking, resuming VAD');
-      isPlayingAudioRef.current = false;
-    }
-  }, [streamingState.isOtherSpeaking, isOtherSpeaking, isHandsFreeMode, isListening, stopRoomListening]);
-
-  // Cleanup VAD on unmount or when leaving hands-free mode
-  useEffect(() => {
-    return () => {
-      if (vad.isActive) {
-        vad.stop();
-      }
-    };
-  }, []);
-
-  // Keyboard shortcut: M key toggles mute
-  useEffect(() => {
-    const handleKeyPress = (e: KeyboardEvent) => {
-      if (e.key === 'm' || e.key === 'M') {
-        // Don't trigger if user is typing in an input field
-        const target = e.target as HTMLElement;
-        if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') {
-          return;
-        }
-        
-        e.preventDefault();
-        toggleMute();
-      }
-    };
-
-    document.addEventListener('keydown', handleKeyPress);
-    return () => document.removeEventListener('keydown', handleKeyPress);
-  }, [toggleMute]);
-
   const displayMessages = useMemo(() => {
     const combined: DisplayMessage[] = [];
 
-    localMessages.forEach(msg => {
-      const translationForParticipant = msg.translations?.[participant.language];
-      const displayText = isSameLanguage(participant.language, msg.sourceLang)
-        ? msg.sourceText
-        : (translationForParticipant || '');
-      const hasNonLatinScript = !!displayText && /[\u0590-\u05FF\u0600-\u06FF\u0750-\u077F\u0900-\u097F\u4E00-\u9FFF\u3040-\u309F\u30A0-\u30FF]/.test(displayText);
-
-      if (displayText && displayText.trim() && !hasNonLatinScript) {
-        combined.push({
-          id: msg.id,
-          timestamp: msg.timestamp,
-          isOwnMessage: true,
-          displayText,
-          source: 'local',
-        });
-      }
-    });
-
+    // Only use server messages (backend-managed architecture)
     messages.forEach(msg => {
       let displayText = '';
       // Show text in participant's language
@@ -612,18 +442,15 @@ export function ChatroomInterface({ roomId, participant, onLeaveRoom }: Chatroom
       }
     });
 
-    const serverMessageIds = new Set(messages.map(m => m.id));
-    const dedupedBySource = combined.filter(msg => msg.source === 'server' || !serverMessageIds.has(msg.id));
-    const uniqueById = dedupedBySource.filter((msg, index, self) => index === self.findIndex(m => m.id === msg.id));
-
+    const uniqueById = combined.filter((msg, index, self) => index === self.findIndex(m => m.id === msg.id));
     uniqueById.sort((a, b) => a.timestamp - b.timestamp);
     return uniqueById;
-  }, [localMessages, messages, participant.id, participant.language]);
+  }, [messages, participant.id, participant.language]);
 
   // Set up global callback for sending translated audio to room
   useEffect(() => {
     (window as any).sendTranslatedAudioToRoom = (audioData: string, originalText: string, translatedText: string) => {
-      console.log(' [GLOBAL CALLBACK] Sending translated audio to room');
+      console.log('🔊 [GLOBAL CALLBACK] Sending translated audio to room');
       sendTranslatedAudio(audioData, originalText, translatedText);
     };
     
@@ -631,39 +458,6 @@ export function ChatroomInterface({ roomId, participant, onLeaveRoom }: Chatroom
       delete (window as any).sendTranslatedAudioToRoom;
     };
   }, [sendTranslatedAudio]);
-
-  // Debug: Log the individual states that make up isVoiceRecording
-  useEffect(() => {
-    console.log(' [isVoiceRecording calculation]:', {
-      isVoiceRecording,
-      isListening,
-      isTranslating,
-      calculation: `${isListening} || ${isTranslating} = ${isVoiceRecording}`
-    });
-  }, [isVoiceRecording, isListening, isTranslating]);
-
-  // Debug: Monitor voice recording state changes
-  useEffect(() => {
-    console.log(' [ChatroomInterface] Voice recording state changed:', {
-      isVoiceRecording,
-      isListening,
-      isTranslating,
-      status,
-      sessionState
-    });
-  }, [isVoiceRecording, isListening, isTranslating, status, sessionState]);
-
-  // Debug: Monitor button disabled state
-  useEffect(() => {
-    const isButtonDisabled = !isVoiceReady || !isConnected || !otherParticipant;
-    console.log(' [ChatroomInterface] Button state:', {
-      isButtonDisabled,
-      isVoiceReady,
-      isConnected,
-      hasOtherParticipant: !!otherParticipant,
-      otherParticipantId: otherParticipant?.id
-    });
-  }, [isVoiceReady, isConnected, otherParticipant]);
 
   // Debug: Monitor transcript history changes
   useEffect(() => {
@@ -679,16 +473,15 @@ export function ChatroomInterface({ roomId, participant, onLeaveRoom }: Chatroom
 
   // Debug: Monitor room messages
   useEffect(() => {
-    console.log(' [ChatroomInterface] Room messages updated:', {
+    console.log('📨 [ChatroomInterface] Room messages updated:', {
       count: messages.length,
-      localCount: localMessages.length,
       messages: messages.map(m => ({
         id: m.id,
         participant: m.participantId,
         text: m.originalText?.substring(0, 30) + '...'
       }))
     });
-  }, [messages.length, localMessages.length]);
+  }, [messages.length]);
 
   const getLanguageDisplay = (lang: 'en-US' | 'fr-CA') => {
     return lang === 'en-US' ? '🇺🇸 English' : '🇨🇦 Français';
@@ -698,41 +491,6 @@ export function ChatroomInterface({ roomId, participant, onLeaveRoom }: Chatroom
     return participant.language === 'en-US' ? 'fr-CA' : 'en-US';
   };
 
-  // Handle mic toggle with room integration - now just toggles mute state
-  const handleMicToggle = useCallback(async () => {
-    console.log(' [MIC TOGGLE] Button clicked. Current state:', {
-      isMuted,
-      isVoiceReady,
-      sessionState,
-      isConnected,
-      hasOtherParticipant: !!otherParticipant
-    });
-    
-    if (!isVoiceReady) {
-      console.error(' [MIC TOGGLE] Voice session not ready!', { sessionState });
-      toast.error('Voice session not ready. Please wait...');
-      return;
-    }
-    if (!otherParticipant) {
-      console.error(' [MIC TOGGLE] No other participant!');
-      toast.error('Waiting for another participant to join...');
-      return;
-    }
-    
-    // In push-to-talk mode: press to start, release to stop and process
-    if (!isMuted) {
-      // Currently speaking - stop and process
-      console.log('🛑 [MIC TOGGLE] Stopping listening and processing audio');
-      stopRoomListening();
-      setIsMuted(true);
-    } else {
-      // Currently muted - start listening
-      console.log('🎤 [MIC TOGGLE] Starting listening');
-      startRoomListening();
-      setIsMuted(false);
-    }
-  }, [isMuted, isVoiceReady, sessionState, isConnected, otherParticipant, startRoomListening, stopRoomListening]);
-
   const copyShareableLink = useCallback(() => {
     const baseUrl = import.meta.env.VITE_APP_BASE_URL || window.location.origin;
     const shareableLink = `${baseUrl}/join/${roomId}`;
@@ -741,49 +499,6 @@ export function ChatroomInterface({ roomId, participant, onLeaveRoom }: Chatroom
       description: shareableLink
     });
   }, [roomId]);
-
-  // Update current transcript from local messages
-  useEffect(() => {
-    console.log(' [TRANSCRIPT UPDATE] Local messages changed:', localMessages.length);
-    if (localMessages.length > 0) {
-      const latestMessage = localMessages[localMessages.length - 1];
-      console.log(' [TRANSCRIPT UPDATE] Latest message:', latestMessage);
-      console.log(' [TRANSCRIPT UPDATE] SourceText:', latestMessage.sourceText);
-      console.log(' [TRANSCRIPT UPDATE] Translations:', latestMessage.translations);
-      
-      // Strict language rule: only show text in this participant's window language
-      const displayText = latestMessage.sourceLang === participant.language
-        ? (latestMessage.sourceText || '')
-        : (latestMessage.translations?.[participant.language] || '');
-      console.log(' [TRANSCRIPT UPDATE] Setting currentTranscript to:', displayText);
-      setCurrentTranscript(displayText);
-      
-      // Keep it visible for 5 seconds after speaking
-      setTimeout(() => {
-        console.log(' [TRANSCRIPT UPDATE] Clearing currentTranscript after timeout');
-        setCurrentTranscript('');
-      }, 5000);
-    } else {
-      setCurrentTranscript('');
-    }
-  }, [localMessages, participant.language]);
-
-  // Clear transcript only when starting a new session or when there are no messages
-  useEffect(() => {
-    if (!isListening && !isTranslating && localMessages.length === 0) {
-      console.log(' [TRANSCRIPT] Clearing transcript (no messages)');
-      setCurrentTranscript('');
-    }
-  }, [isListening, isTranslating, localMessages.length]);
-
-  // Debug: Log current transcript state
-  useEffect(() => {
-    console.log(' [CURRENT TRANSCRIPT STATE]:', {
-      currentTranscript,
-      isListening,
-      localMessagesCount: localMessages.length
-    });
-  }, [currentTranscript, isListening, localMessages.length]);
 
   return (
     <div className="h-screen bg-background flex flex-col overflow-hidden relative">
@@ -827,18 +542,15 @@ export function ChatroomInterface({ roomId, participant, onLeaveRoom }: Chatroom
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-4">
               <div className="flex items-center gap-2">
-                <div className={`w-3 h-3 rounded-full ${!isMuted && (isListening || vad.isSpeaking) ? 'bg-primary animate-pulse' : 'bg-primary'}`} />
+                <div className={`w-3 h-3 rounded-full bg-primary`} />
                 <span className="text-sm font-medium text-foreground">{participant.name}</span>
                 <span className="text-xs text-muted-foreground">
                   {getLanguageDisplay(participant.language)}
                 </span>
-                {!isMuted && (isListening || vad.isSpeaking) && (
-                  <span className="text-xs text-primary font-medium">Speaking...</span>
-                )}
               </div>
               {otherParticipant && (
                 <>
-                  <span className="text-muted-foreground"></span>
+                  <span className="text-muted-foreground">↔</span>
                   <div className="flex items-center gap-2">
                     <div className={`w-3 h-3 rounded-full ${isRemoteSpeaking ? 'bg-green-500 animate-pulse' : 'bg-green-500'}`} />
                     <span className="text-sm font-medium text-foreground">{otherParticipant.name}</span>
@@ -852,12 +564,6 @@ export function ChatroomInterface({ roomId, participant, onLeaveRoom }: Chatroom
                 </>
               )}
             </div>
-            {isListening && (
-              <div className="flex items-center gap-1.5 px-2 py-1 bg-primary/10 rounded-full">
-                <div className="w-2 h-2 rounded-full bg-primary animate-pulse" />
-                <span className="text-xs font-medium text-primary">Speaking</span>
-              </div>
-            )}
           </div>
 
           <TranslatingIndicator
@@ -914,9 +620,7 @@ export function ChatroomInterface({ roomId, participant, onLeaveRoom }: Chatroom
                       </div>
                     )}
 
-                    {/* Removed temporary "you said" display - messages will appear in chat history below */}
-                    
-                    {/* Chat Bubbles - Show local messages for instant feedback + server messages */}
+                    {/* Chat Bubbles - Show server messages */}
                     {displayMessages.length > 0 ? (
                         <div className="space-y-3 mb-4">
                           {displayMessages.map((message) => {
@@ -948,31 +652,9 @@ export function ChatroomInterface({ roomId, participant, onLeaveRoom }: Chatroom
                         <div className="text-center py-12">
                           <MessageCircle className="w-12 h-12 mx-auto text-muted-foreground/30 mb-3" />
                           <p className="text-sm text-muted-foreground">No messages yet</p>
-                          <p className="text-xs text-muted-foreground/70 mt-1">Click the mic button to unmute and start speaking</p>
+                          <p className="text-xs text-muted-foreground/70 mt-1">Start speaking — translation will appear here</p>
                         </div>
                       )}
-                    
-                    {/* Incoming Transcript - Other person speaking, showing TRANSLATED text in YOUR language */}
-                    {(isOtherSpeaking || incomingTranscript) && !isListening && localMessages.length > 0 && (
-                      <div className="sticky top-0 z-10 bg-green-500/10 border-2 border-green-500 rounded-lg p-4 mb-4 shadow-lg">
-                        <div className="flex items-center gap-2 mb-2">
-                          <Loader2 className="w-4 h-4 animate-spin text-green-600" />
-                          <span className="text-sm font-semibold text-green-600">
-                            {otherParticipant?.name || 'Other'} is speaking...
-                          </span>
-                        </div>
-                        {incomingTranscript ? (
-                          <>
-                            <p className="text-lg text-foreground font-medium">{incomingTranscript}</p>
-                            <p className="text-xs text-muted-foreground mt-1">
-                              {participant.language === 'en-US' ? ' English' : ' Franais'}
-                            </p>
-                          </>
-                        ) : (
-                          <p className="text-sm text-muted-foreground italic">Translating to {participant.language === 'en-US' ? 'English' : 'Franais'}...</p>
-                        )}
-                      </div>
-                    )}
                     
                   </div>
                 </div>
@@ -1058,117 +740,29 @@ export function ChatroomInterface({ roomId, participant, onLeaveRoom }: Chatroom
 
         {/* Bottom Control Bar */}
         <div className="border-t border-border/50 p-4 bg-secondary/30">
-          <div className="max-w-4xl mx-auto space-y-3">
-            
-            {/* Main Mic Control - Single button for mute/unmute */}
-            {otherParticipant && isVoiceReady && (
-              <div className="flex items-center gap-2 relative">
-                {/* Pulsing ring when speaking (VAD active) */}
-                {!isMuted && (isListening || vad.isSpeaking) && (
-                  <>
-                    <span className="absolute left-0 right-0 mx-auto w-[calc(100%-8px)] h-16 rounded-lg bg-primary/20 animate-pulse" style={{ animationDuration: '1.5s' }} />
-                    <span className="absolute left-0 right-0 mx-auto w-[calc(100%-8px)] h-16 rounded-lg bg-primary/10 animate-pulse" style={{ animationDuration: '1.5s', animationDelay: '0.75s' }} />
-                  </>
-                )}
-                
-                <button
-                  onClick={handleMicToggle}
-                  disabled={!bothUsersReady || !isVoiceReady || !isConnected || !otherParticipant}
-                  title={!bothUsersReady ? 'Waiting for other participant...' : ''}
-                  className={`relative z-10 flex-1 flex items-center justify-center gap-3 px-6 py-4 rounded-lg border-2 transition-all text-base font-medium ${
-                    !bothUsersReady
-                      ? 'border-border bg-muted text-muted-foreground cursor-not-allowed opacity-60'
-                      : isMuted
-                      ? 'border-border bg-secondary hover:bg-muted text-muted-foreground hover:scale-[1.02] active:scale-95'
-                      : isListening || vad.isSpeaking
-                        ? 'border-primary/40 bg-primary text-primary-foreground shadow-lg shadow-primary/20'
-                        : 'border-primary bg-primary/10 text-primary hover:bg-primary/20'
-                  } disabled:opacity-50 disabled:cursor-not-allowed`}
-                >
-                  {!bothUsersReady ? (
-                    <>
-                      <Loader2 className="w-5 h-5 animate-spin" />
-                      <span>Waiting for other participant...</span>
-                    </>
-                  ) : isMuted ? (
-                    <>
-                      <MicOff className="w-5 h-5" />
-                      <span>Click to Unmute & Speak</span>
-                    </>
-                  ) : isListening || vad.isSpeaking ? (
-                    <>
-                      <Mic className="w-5 h-5 animate-pulse" />
-                      <span>Speaking...</span>
-                      <div className="w-2 h-2 rounded-full bg-primary-foreground animate-pulse" />
-                    </>
-                  ) : (
-                    <>
-                      <Mic className="w-5 h-5" />
-                      <span>Speak Naturally (Hands-Free)</span>
-                      <div className="w-2 h-2 rounded-full bg-green-500" />
-                    </>
-                  )}
-                </button>
-              </div>
-            )}
-            
-            {/* Voice Level (only when speaking) */}
-            {!isMuted && (isListening || vad.isSpeaking) && audioLevel !== null && (
-              <div className="space-y-1">
-                <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                  <Waves className="w-3 h-3" />
-                  <span>Voice Level</span>
-                  <span className="text-primary">(Hands-Free Active)</span>
+          <div className="max-w-4xl mx-auto">
+            {/* Status message - mic auto-starts when both participants join */}
+            {otherParticipant ? (
+              <div className="text-center py-3">
+                <div className="flex items-center justify-center gap-2 text-sm text-green-600">
+                  <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+                  <span className="font-medium">Live translation active — speak naturally</span>
                 </div>
-                <div className="w-full bg-secondary rounded-full h-1.5 overflow-hidden">
-                  <div 
-                    className="bg-primary h-1.5 rounded-full transition-all duration-150"
-                    style={{ width: `${Math.min(Math.max(0, (audioLevel + 100) / 100) * 100, 100)}%` }}
-                  />
+                <p className="text-xs text-muted-foreground mt-1">
+                  Your microphone is automatically streaming to the backend
+                </p>
+              </div>
+            ) : (
+              <div className="text-center py-3">
+                <div className="flex items-center justify-center gap-2 text-sm text-yellow-600">
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span>Waiting for other participant to join...</span>
                 </div>
               </div>
             )}
           </div>
         </div>
       </div>
-
-      {/* Mode Instructions */}
-      {otherParticipant && isVoiceReady && (
-        <div className="border-t border-border/50 bg-secondary/30 px-5 py-3 relative z-10">
-          <div className="flex items-center justify-center gap-6 text-xs text-muted-foreground">
-            {isMuted ? (
-              <>
-                <div className="flex items-center gap-2">
-                  <MicOff className="w-4 h-4 text-muted-foreground" />
-                  <span>Microphone is muted</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span>Click the microphone button to start speaking</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <kbd className="px-2 py-1 text-xs font-mono bg-background border border-border rounded">M</kbd>
-                  <span>Press M to toggle mute</span>
-                </div>
-              </>
-            ) : (
-              <>
-                <div className="flex items-center gap-2">
-                  <Zap className="w-4 h-4 text-primary" />
-                  <span className="text-primary font-medium">Hands-Free Mode Active</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
-                  <span>Speak naturally - voice detected automatically</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <kbd className="px-2 py-1 text-xs font-mono bg-background border border-border rounded">M</kbd>
-                  <span>Press M to mute</span>
-                </div>
-              </>
-            )}
-          </div>
-        </div>
-      )}
 
       {/* Footer */}
       <footer className="border-t border-border/50 py-2 px-5 flex items-center justify-between relative z-10">
@@ -1178,12 +772,12 @@ export function ChatroomInterface({ roomId, participant, onLeaveRoom }: Chatroom
             <span>Room: {isConnected ? 'Connected' : 'Disconnected'}</span>
           </div>
           <div className="flex items-center gap-1.5">
-            <div className={`w-1.5 h-1.5 rounded-full ${isVoiceReady ? 'bg-primary' : 'bg-yellow-500'}`} />
-            <span>AI: {isVoiceReady ? 'Ready' : 'Connecting...'}</span>
+            <div className={`w-1.5 h-1.5 rounded-full ${otherParticipant ? 'bg-primary' : 'bg-yellow-500'}`} />
+            <span>Translation: {otherParticipant ? 'Active' : 'Waiting...'}</span>
           </div>
         </div>
         <p className="text-xs text-muted-foreground/40 tracking-wide">
-          Real-time translation: {participant.language === 'en-US' ? 'English  French' : 'French  English'}
+          Real-time translation: {participant.language === 'en-US' ? 'English ↔ French' : 'French ↔ English'}
         </p>
       </footer>
     </div>

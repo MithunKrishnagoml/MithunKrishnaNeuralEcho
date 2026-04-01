@@ -196,24 +196,149 @@ class TranslationSession {
 }
 
 function buildTranslationInstructions(inputLang, outputLang) {
-  const inputLangName = inputLang === "en-US" ? "English" : "French";
-  const outputLangName = outputLang === "en-US" ? "English" : "French";
+  const inputLangName = inputLang === "en" ? "English" : "French";
+  const outputLangName = outputLang === "en" ? "English" : "French";
 
-  return `You are a strict translator between English and French only.
+  return `You are a strict real-time translator for phone-call-like conversations.
+
+Your role:
+- Listen to ${inputLangName} speech
+- Translate to ${outputLangName} in real-time
+- Speak the translation naturally with appropriate tone
 
 Rules:
-1. Output the translation ONLY. No explanations, no greetings, no commentary.
-2. Translate word for word. Never paraphrase or summarize.
-3. Never add or remove words. Never correct grammar.
-4. Keep names, numbers, and dates exactly as spoken.
-5. If input is not English or French, return empty string.
-6. Never respond conversationally. You are a translation engine, not a chatbot.
+1. Translate ONLY. No explanations, no greetings, no commentary.
+2. Preserve meaning and tone exactly as spoken.
+3. Keep names, numbers, and dates exactly as heard.
+4. Never respond conversationally. You are a translation engine.
+5. Speak naturally in ${outputLangName} with appropriate emotion and pacing.
 
 Examples:
-Input: Hello     → Output: Bonjour
-Input: Thank you → Output: Merci
-Input: Merci     → Output: Thank you
-Input: Bonjour   → Output: Hello`;
+${inputLangName}: "Hello, how are you?" → ${outputLangName}: "Bonjour, comment allez-vous?"
+${inputLangName}: "Thank you very much" → ${outputLangName}: "Merci beaucoup"`;
+}
+
+// Create OpenAI Realtime WebSocket session for translation
+async function createOpenAISession(inputLang, outputLang) {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket('wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-12-17', {
+      headers: {
+        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+        'OpenAI-Beta': 'realtime=v1'
+      }
+    });
+
+    ws.on('open', () => {
+      console.log(`✅ [OpenAI] Session opened for ${inputLang} → ${outputLang}`);
+      
+      // Configure session for translation
+      ws.send(JSON.stringify({
+        type: 'session.update',
+        session: {
+          modalities: ['text', 'audio'],
+          instructions: buildTranslationInstructions(inputLang, outputLang),
+          voice: 'shimmer',
+          input_audio_format: 'pcm16',
+          output_audio_format: 'pcm16',
+          input_audio_transcription: { 
+            model: 'whisper-1', 
+            language: inputLang 
+          },
+          turn_detection: {
+            type: 'server_vad',
+            threshold: 0.4,
+            prefix_padding_ms: 200,
+            silence_duration_ms: 400
+          }
+        }
+      }));
+      
+      resolve(ws);
+    });
+
+    ws.on('error', (error) => {
+      console.error(`❌ [OpenAI] Session error for ${inputLang} → ${outputLang}:`, error);
+      reject(error);
+    });
+  });
+}
+
+// Wire OpenAI output to target participant
+function wireOpenAIOutput(openaiWs, targetParticipant, session, speakerId) {
+  let chunkSeq = 0;
+
+  // Keepalive ping every 30s to prevent OpenAI WS timeout
+  const pingInterval = setInterval(() => {
+    if (openaiWs.readyState === WebSocket.OPEN) {
+      openaiWs.ping?.();
+    } else {
+      clearInterval(pingInterval);
+    }
+  }, 30000);
+
+  openaiWs.on('message', (raw) => {
+    try {
+      const event = JSON.parse(raw);
+
+      // Stream translated audio to target participant in real time
+      if (event.type === 'response.audio.delta') {
+        if (targetParticipant.socket?.readyState === WebSocket.OPEN) {
+          targetParticipant.socket.send(JSON.stringify({
+            type: 'TRANSLATED_AUDIO_CHUNK',
+            audioData: event.delta, // base64 PCM16
+            chunkId: `chunk_${speakerId}_${chunkSeq++}`,
+            speakerId,
+            timestamp: Date.now()
+          }));
+        }
+      }
+
+      // Send transcript to SPEAKER (their own words)
+      if (event.type === 'conversation.item.input_audio_transcription.completed') {
+        const speakerParticipant = session.participants.get(speakerId);
+        if (speakerParticipant?.socket?.readyState === WebSocket.OPEN) {
+          speakerParticipant.socket.send(JSON.stringify({
+            type: 'MY_TRANSCRIPT',
+            text: event.transcript,
+            speakerId,
+            timestamp: Date.now()
+          }));
+        }
+      }
+
+      // Send translation text to LISTENER (what they're hearing)
+      if (event.type === 'response.audio_transcript.done') {
+        if (targetParticipant.socket?.readyState === WebSocket.OPEN) {
+          targetParticipant.socket.send(JSON.stringify({
+            type: 'INCOMING_TRANSCRIPT',
+            text: event.transcript,
+            speakerId,
+            timestamp: Date.now()
+          }));
+        }
+      }
+    } catch (error) {
+      console.error('❌ [OpenAI] Error processing message:', error);
+    }
+  });
+
+  openaiWs.on('error', (error) => {
+    console.error(`❌ [OpenAI] WebSocket error for speaker ${speakerId}:`, error);
+  });
+
+  openaiWs.on('close', () => {
+    clearInterval(pingInterval);
+    console.log(`🔌 [OpenAI] Session closed for speaker ${speakerId}`);
+    
+    // Notify participant that translation service disconnected
+    const speakerParticipant = session.participants.get(speakerId);
+    if (speakerParticipant?.socket?.readyState === WebSocket.OPEN) {
+      speakerParticipant.socket.send(JSON.stringify({
+        type: 'error',
+        message: 'Translation service disconnected. Please rejoin.'
+      }));
+    }
+  });
 }
 
 // API Routes
@@ -480,10 +605,7 @@ wss.on('connection', (ws, req) => {
         translationSession.addParticipant(userId, language, ws, name);
         activeConnections.set(ws, { sessionId, userId });
 
-        console.log(`G�� Participant ${userId} joined session ${sessionId}. Total participants: ${translationSession.participants.size}`);
-
-        // NOTE: OpenAI connection is handled directly via WebRTC on the frontend
-        // Backend only relays AI_AUDIO_CHUNK and messages between participants
+        console.log(`👤 Participant ${userId} joined session ${sessionId}. Total participants: ${translationSession.participants.size}`);
 
         // If this is the first participant, send waiting message
         if (translationSession.participants.size === 1) {
@@ -530,28 +652,60 @@ wss.on('connection', (ws, req) => {
           }));
         }
 
-        // Notify participants once both peers are connected.
-        // Translation/TTS is handled on the client WebRTC->OpenAI path.
+        // Initialize OpenAI sessions when both participants join
         if (translationSession.participants.size === 2) {
-          console.log(`=��� Session ${sessionId} now has 2 participants! Ready for translation.`);
+          console.log(`🚀 Session ${sessionId} now has 2 participants! Initializing OpenAI sessions...`);
           
-          // Notify all participants that translation is ready
-          for (const [currentUserId, participant] of translationSession.participants.entries()) {
-            if (participant.socket?.readyState === WebSocket.OPEN) {
-              // Find the other participant
-              const otherParticipant = Array.from(translationSession.participants.entries())
-                .find(([userId]) => userId !== currentUserId);
-              
-              participant.socket.send(JSON.stringify({ 
-                type: 'translation_ready',
-                message: 'Both participants connected. Translation is live.',
-                participantCount: 2,
-                otherParticipant: otherParticipant ? {
-                  id: otherParticipant[0],
-                  name: otherParticipant[1].name || 'Other Participant',
-                  language: otherParticipant[1].language
-                } : null
-              }));
+          const [userA, userB] = Array.from(translationSession.participants.entries());
+          
+          // Normalize language codes (en-US → en, fr-CA → fr)
+          const langA = userA[1].language.toLowerCase().startsWith('en') ? 'en' : 'fr';
+          const langB = userB[1].language.toLowerCase().startsWith('en') ? 'en' : 'fr';
+          
+          try {
+            // Session A: translates userA's language → userB's language
+            const sessionA = await createOpenAISession(langA, langB);
+            userA[1].openaiWs = sessionA;
+            
+            // Session B: translates userB's language → userA's language
+            const sessionB = await createOpenAISession(langB, langA);
+            userB[1].openaiWs = sessionB;
+            
+            // Wire OpenAI output → other participant
+            wireOpenAIOutput(sessionA, userB[1], translationSession, userA[0]);
+            wireOpenAIOutput(sessionB, userA[1], translationSession, userB[0]);
+            
+            console.log(`✅ OpenAI sessions initialized for ${sessionId}`);
+            
+            // Notify all participants that translation is ready
+            for (const [currentUserId, participant] of translationSession.participants.entries()) {
+              if (participant.socket?.readyState === WebSocket.OPEN) {
+                const otherParticipant = Array.from(translationSession.participants.entries())
+                  .find(([userId]) => userId !== currentUserId);
+                
+                participant.socket.send(JSON.stringify({ 
+                  type: 'translation_ready',
+                  message: 'Both participants connected. Translation is live.',
+                  participantCount: 2,
+                  otherParticipant: otherParticipant ? {
+                    id: otherParticipant[0],
+                    name: otherParticipant[1].name || 'Other Participant',
+                    language: otherParticipant[1].language
+                  } : null
+                }));
+              }
+            }
+          } catch (error) {
+            console.error(`❌ Failed to initialize OpenAI sessions for ${sessionId}:`, error);
+            
+            // Notify participants of error
+            for (const participant of translationSession.participants.values()) {
+              if (participant.socket?.readyState === WebSocket.OPEN) {
+                participant.socket.send(JSON.stringify({
+                  type: 'error',
+                  message: 'Failed to initialize translation service. Please try again.'
+                }));
+              }
             }
           }
         }
@@ -1008,35 +1162,27 @@ wss.on('connection', (ws, req) => {
         }
       }
 
-            // Handle room-based audio data
-      if (data.type === 'ROOM_AUDIO_DATA') {
-        const { participantId, audioData } = data;
-        console.log(`=�Ħ [ROOM AUDIO] From ${participantId}`);
-        
+      // Handle incoming mic audio from frontend
+      if (data.type === 'MIC_AUDIO') {
+        const { audioData } = data; // base64 PCM16 from mic
         const connection = activeConnections.get(ws);
         if (!connection) return;
 
-        const { sessionId } = connection;
+        const { sessionId, userId } = connection;
         const translationSession = translationSessions.get(sessionId);
         if (!translationSession) return;
 
-        const participant = translationSession.participants.get(participantId);
+        const participant = translationSession.participants.get(userId);
         if (!participant?.openaiWs || participant.openaiWs.readyState !== WebSocket.OPEN) {
+          console.warn(`⚠️ [MIC_AUDIO] OpenAI session not ready for ${userId}`);
           return;
         }
 
-        // Track processing start time
-        participant.lastRequestTime = Date.now();
-
-        // Send audio to OpenAI for real-time processing
-        const audioMessage = {
+        // Send audio directly to OpenAI for translation
+        participant.openaiWs.send(JSON.stringify({
           type: 'input_audio_buffer.append',
           audio: audioData
-        };
-
-        participant.openaiWs.send(JSON.stringify(audioMessage));
-        
-        console.log(`=�Ħ [Audio] Processing audio for user ${participantId} in room ${sessionId}`);
+        }));
       }
 
     } catch (error) {
@@ -1208,107 +1354,16 @@ app.get('/api/session/:roomId/status', (req, res) => {
   });
 });
 
-// Create OpenAI Realtime Session endpoint (for frontend WebRTC)
-app.post('/api/openai/realtime-session', async (req, res) => {
-  try {
-    const { instructions, turn_detection, voice, input_audio_transcription, modalities, max_response_output_tokens, input_audio_format, output_audio_format } = req.body;
-    
-    console.log('🔧 [OpenAI Session] Request received');
-    console.log('🔧 [OpenAI Session] Request body:', JSON.stringify(req.body, null, 2));
-    console.log('🔧 [OpenAI Session] Checking for OPENAI_API_KEY...');
-    
-    if (!process.env.OPENAI_API_KEY) {
-      console.error('❌ [OpenAI Session] OPENAI_API_KEY not found in environment variables');
-      return res.status(500).json({ 
-        error: 'OpenAI API key not configured on server',
-        hint: 'Please set OPENAI_API_KEY environment variable in Render dashboard'
-      });
-    }
-
-    console.log('✅ [OpenAI Session] OPENAI_API_KEY found, creating realtime session');
-
-    // CRITICAL: Forward language hint to Whisper to prevent wrong-language transcripts
-    const audioTranscription = input_audio_transcription || { model: 'whisper-1' };
-    console.log('🔧 [OpenAI Session] Whisper config:', JSON.stringify(audioTranscription));
-
-    // Build request payload according to OpenAI Realtime API spec
-    // Reference: https://platform.openai.com/docs/api-reference/realtime
-    const requestPayload = {
-      model: 'gpt-4o-realtime-preview-2024-12-17',
-      modalities: modalities || ['text', 'audio'],
-      instructions: instructions || 'You are a helpful assistant.',
-      voice: voice || 'alloy',
-      input_audio_format: input_audio_format || 'pcm16',
-      output_audio_format: output_audio_format || 'pcm16',
-      input_audio_transcription: audioTranscription,
-      turn_detection: turn_detection || null,
-      tools: [],
-      tool_choice: 'none',
-      // temperature is NOT supported in Realtime API - removed
-      // max_response_output_tokens: Supported, but optional
-    };
-
-    // Only include max_response_output_tokens if explicitly provided
-    if (max_response_output_tokens !== undefined) {
-      requestPayload.max_response_output_tokens = max_response_output_tokens;
-    }
-
-    console.log('🔧 [OpenAI Session] Sending request to OpenAI:', JSON.stringify(requestPayload, null, 2));
-
-    const response = await fetch('https://api.openai.com/v1/realtime/sessions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(requestPayload),
-    });
-
-    if (!response.ok) {
-      // Parse error response for detailed logging
-      let errorDetails;
-      try {
-        errorDetails = await response.json();
-        console.error('❌ [OpenAI Session] OpenAI API Error Response:', JSON.stringify(errorDetails, null, 2));
-      } catch (parseError) {
-        const errorText = await response.text();
-        console.error('❌ [OpenAI Session] OpenAI API Error (raw):', errorText);
-        errorDetails = { message: errorText };
-      }
-
-      // Return detailed error to frontend
-      return res.status(response.status).json({ 
-        error: `OpenAI API returned ${response.status}`,
-        message: errorDetails?.error?.message || errorDetails?.message || 'Unknown error',
-        details: errorDetails,
-        hint: response.status === 400 ? 'Invalid request parameters. Check console for details.' : undefined
-      });
-    }
-
-    const data = await response.json();
-    console.log('✅ [OpenAI Session] Session created successfully');
-    console.log('✅ [OpenAI Session] Session ID:', data.id);
-    res.json(data);
-  } catch (error) {
-    console.error('❌ [OpenAI Session] Unexpected error:', error);
-    res.status(500).json({ 
-      error: 'Internal server error',
-      message: error.message,
-      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
-    });
-  }
-});
-
 // Start server
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`=��� NeuralEcho Translation Server running on http://0.0.0.0:${PORT}`);
-  console.log(`=��� Health Check: http://0.0.0.0:${PORT}/health`);
-  console.log(`=��� WebSocket Server: ws://0.0.0.0:${PORT}`);
-  console.log(`=��� Environment Check:`);
+  console.log(`🚀 NeuralEcho Translation Server running on http://0.0.0.0:${PORT}`);
+  console.log(`✅ Health Check: http://0.0.0.0:${PORT}/health`);
+  console.log(`🔌 WebSocket Server: ws://0.0.0.0:${PORT}`);
+  console.log(`🔧 Environment Check:`);
   console.log(`   - NODE_ENV: ${process.env.NODE_ENV || 'not set'}`);
   console.log(`   - OPENAI_API_KEY: ${process.env.OPENAI_API_KEY ? 'configured ✅' : 'MISSING ❌'}`);
-  console.log(`   - Available env vars: ${Object.keys(process.env).filter(k => k.includes('OPENAI') || k.includes('API')).join(', ')}`);
+  console.log(`📡 Backend-managed translation architecture active`);
 });
 
 export default app;

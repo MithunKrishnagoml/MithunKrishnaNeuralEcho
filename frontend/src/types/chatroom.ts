@@ -85,7 +85,7 @@ export type ChatroomEvent =
   | { type: 'CONNECTION_ESTABLISHED'; message: string }
   | { type: 'joined_session'; sessionId: string; userId: string; participantCount: number }
   | { type: 'participant_joined'; sessionId: string; participantCount: number; newParticipantLanguage: 'en-US' | 'fr-CA' }
-  | { type: 'translation_ready'; message: string; participantCount: number }
+  | { type: 'translation_ready'; message: string; participantCount: number; otherParticipant?: { id: string; name: string; language: 'en-US' | 'fr-CA' } }
   | { type: 'USER_JOINED_ROOM'; sessionId: string; userId?: string; participantCount: number; language?: 'en-US' | 'fr-CA'; newParticipantLanguage?: 'en-US' | 'fr-CA'; newParticipantName?: string }
   | { type: 'USER_LEFT_ROOM'; sessionId: string; userId: string; participantCount: number }
   | { type: 'SPEECH_TRANSCRIPT'; participantId: string; transcript: string; language: 'en-US' | 'fr-CA'; fromParticipant?: string; originalText?: string; originalLanguage?: 'en-US' | 'fr-CA'; timestamp?: number }
@@ -130,4 +130,7 @@ export type ChatroomEvent =
   | { type: 'error'; message: string }
   | { type: 'BILINGUAL_MESSAGE'; sessionId?: string; message: { id: string; speakerId: string; originalText: string; translatedText: string; originalLanguage: 'en-US' | 'fr-CA'; targetLanguage: 'en-US' | 'fr-CA'; timestamp?: number; processingTime?: number; }; timestamp?: number; }
   | { type: 'translation_timeout'; originalText: string; timestamp: number; message: string; }
-  | { type: 'LANGUAGE_SELECTED'; sessionId: string; participantId: string; language: 'en-US' | 'fr-CA'; participantName: string };
+  | { type: 'LANGUAGE_SELECTED'; sessionId: string; participantId: string; language: 'en-US' | 'fr-CA'; participantName: string }
+  | { type: 'TRANSLATED_AUDIO_CHUNK'; audioData: string; chunkId: string; speakerId: string; timestamp: number }
+  | { type: 'MY_TRANSCRIPT'; text: string; speakerId: string; timestamp: number }
+  | { type: 'INCOMING_TRANSCRIPT'; text: string; speakerId: string; timestamp: number };

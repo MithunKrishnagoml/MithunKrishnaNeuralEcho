@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { ChatroomEvent, ChatroomParticipant, ChatroomMessage, Chatroom } from '@/types/chatroom';
 import { reportNetworkError, reportWebSocketError } from '@/utils/StreamingErrorHandler';
-import { PCM16Player } from '@/utils/PCM16Player';
+import { useTranslationAudio } from './useTranslationAudio';
+import { useMicStream } from './useMicStream';
 
 interface UseChatroomConnectionProps {
   roomId: string;
@@ -18,29 +19,31 @@ export function useChatroomConnection({ roomId, participant, onEvent }: UseChatr
   const [messages, setMessages] = useState<ChatroomMessage[]>([]);
   const [otherParticipant, setOtherParticipant] = useState<ChatroomParticipant | null>(null);
   const [lastTranslation, setLastTranslation] = useState<string>('');
+  const [micEnabled, setMicEnabled] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const connectionAttemptRef = useRef<boolean>(false);
-  const translatedAudioPlayerRef = useRef<PCM16Player | null>(null);
-  const processedChunkIdsRef = useRef<Set<string>>(new Set()); // Track processed chunk IDs to prevent duplicates
 
-  // Initialize translated audio player with PCM16Player
-  useEffect(() => {
-    translatedAudioPlayerRef.current = new PCM16Player();
-    console.log('🎵 [PCM16Player] Initialized for translated audio playback');
+  // Use new translation audio hook instead of PCM16Player
+  const translationAudio = useTranslationAudio();
 
-    return () => {
-      translatedAudioPlayerRef.current?.dispose();
-      translatedAudioPlayerRef.current = null;
-    };
-  }, []);
+  // Setup mic streaming
+  useMicStream({
+    enabled: micEnabled && isConnected,
+    onAudioData: (base64) => {
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify({
+          type: 'MIC_AUDIO',
+          audioData: base64
+        }));
+      }
+    }
+  });
 
   // Handle user gesture for autoplay policy - trigger on any user interaction
   const handleUserGesture = useCallback(async () => {
-    if (translatedAudioPlayerRef.current) {
-      await translatedAudioPlayerRef.current.resume();
-      console.log('🎵 User gesture handled for PCM16Player');
-    }
-  }, []);
+    await translationAudio.resume();
+    console.log('🎵 User gesture handled for TranslationAudio');
+  }, [translationAudio]);
 
   // Add multiple event listeners to handle autoplay policy
   useEffect(() => {
@@ -145,17 +148,20 @@ export function useChatroomConnection({ roomId, participant, onEvent }: UseChatr
             console.log('✅ Translation session is ready with 2 participants');
             console.log('✅ Both participants are now connected!');
             
-            // Set other participant if not already set (using fallback since translation_ready doesn't include participant info)
-            if (!otherParticipant) {
-              console.log('✅ Setting other participant from translation_ready (fallback)');
+            // Set other participant if not already set
+            if (!otherParticipant && data.otherParticipant) {
               setOtherParticipant({
-                id: 'other-participant',
-                name: 'Other Participant',
-                language: participant.language === 'en-US' ? 'fr-CA' : 'en-US',
+                id: data.otherParticipant.id,
+                name: data.otherParticipant.name,
+                language: data.otherParticipant.language,
                 joinedAt: new Date(),
                 isConnected: true
               });
             }
+            
+            // Start streaming mic audio to backend
+            setMicEnabled(true);
+            console.log('🎤 [MicStream] Enabled - starting audio streaming');
             break;
             
           case 'TRANSLATED_MESSAGE':
@@ -239,130 +245,72 @@ export function useChatroomConnection({ roomId, participant, onEvent }: UseChatr
             console.log('✅ Continuing transcript processing despite timeout');
             break;
             
-          case 'AUDIO_CHUNK':
-            console.log('🎵 ═══════════════════════════════════════════════════════');
-            console.log('🎵 [AUDIO_CHUNK] Received audio chunk');
-            console.log('🎵 [AUDIO_CHUNK] From participant:', data.participantId);
-            console.log('🎵 [AUDIO_CHUNK] Speaker ID:', data.speakerId ?? 'not provided');
-            console.log('🎵 [AUDIO_CHUNK] My participant ID:', participant.id);
-            console.log('🎵 [AUDIO_CHUNK] Response ID:', data.responseId);
-            console.log('🎵 [AUDIO_CHUNK] Chunk ID:', data.chunkId);
-            console.log('🎵 [AUDIO_CHUNK] Audio data size:', data.audioData?.length || 0, 'bytes');
-            console.log('🎵 [AUDIO_CHUNK] Player ready:', !!translatedAudioPlayerRef.current);
-            console.log('🎵 ═══════════════════════════════════════════════════════');
+          case 'TRANSLATED_AUDIO_CHUNK': {
+            if (data.type !== 'TRANSLATED_AUDIO_CHUNK') break;
             
-            // RULE 1: Never play your own audio back
-            if (data.participantId === participant.id) {
-              console.log('⚠️ [AUDIO_CHUNK] Skipping own audio');
-              break;
-            }
+            console.log('🎵 [TRANSLATED_AUDIO_CHUNK] Received from backend');
+            console.log('🎵 [TRANSLATED_AUDIO_CHUNK] Speaker ID:', data.speakerId);
+            console.log('🎵 [TRANSLATED_AUDIO_CHUNK] Chunk ID:', data.chunkId);
+            console.log('🎵 [TRANSLATED_AUDIO_CHUNK] Audio data size:', data.audioData?.length || 0);
             
-            // RULE 2: Only play ai-agent chunks (translations), never raw participant audio
-            // Raw participant chunks have participantId === 'participant-XXX' with no speakerId
-            // Translation chunks have participantId === 'ai-agent' with speakerId set
-            if (data.participantId !== 'ai-agent') {
-              console.log('⚠️ [AUDIO_CHUNK] Skipping raw participant audio, only playing translations from ai-agent');
-              break;
-            }
-            
-            // Validation checks
-            if (!data.audioData) {
-              console.error('❌ [AUDIO_CHUNK] FAILED - No audioData in event');
-              break;
-            }
-            
-            if (!translatedAudioPlayerRef.current) {
-              console.error('❌ [AUDIO_CHUNK] FAILED - Player not initialized');
-              break;
-            }
-            
-            // RULE 3: Deduplicate chunks by chunkId
-            const chunkId = data.chunkId || `${data.responseId}_${data.timestamp}`;
-            if (processedChunkIdsRef.current.has(chunkId)) {
-              console.log('⚠️ [AUDIO_CHUNK] Duplicate chunk detected, skipping:', chunkId);
-              break;
-            }
-            
-            // Add to processed set with size limit to prevent memory leak
-            processedChunkIdsRef.current.add(chunkId);
-            if (processedChunkIdsRef.current.size > 200) {
-              // Remove oldest entries (first 50) when limit exceeded
-              const entries = Array.from(processedChunkIdsRef.current);
-              entries.slice(0, 50).forEach(id => processedChunkIdsRef.current.delete(id));
-              console.log('🧹 [AUDIO_CHUNK] Cleaned up old chunk IDs, new size:', processedChunkIdsRef.current.size);
-            }
-            
-            try {
-              // Resume audio context on first chunk (autoplay policy)
-              translatedAudioPlayerRef.current.resume();
-              
-              // Enqueue PCM16 chunk - PCM16Player now handles overflow internally
-              const success = translatedAudioPlayerRef.current.enqueue(data.audioData);
-              
-              if (success) {
-                console.log('✅ [AUDIO_CHUNK] Successfully enqueued translation to PCM16Player');
-              } else {
-                console.warn('⚠️ [AUDIO_CHUNK] Chunk dropped due to queue overflow');
-              }
-            } catch (error) {
-              console.error('❌ [AUDIO_CHUNK] FAILED to enqueue chunk:', error);
-            }
+            // This is the ONLY audio event to play — no filtering needed
+            // Backend guarantees this is translated audio for this participant only
+            if (!data.audioData || !data.chunkId) break;
+
+            translationAudio.resume();
+            translationAudio.enqueueChunk(data.audioData, data.chunkId);
             break;
+          }
+
+          case 'MY_TRANSCRIPT': {
+            if (data.type !== 'MY_TRANSCRIPT') break;
             
-          case 'TRANSLATED_AUDIO':
-            console.log('🔊 ═══════════════════════════════════════════════════════');
-            console.log('🔊 [TRANSLATED_AUDIO] Received translated audio');
-            console.log('🔊 [TRANSLATED_AUDIO] From participant:', data.fromParticipant);
-            console.log('🔊 [TRANSLATED_AUDIO] My participant ID:', participant.id);
-            console.log('🔊 [TRANSLATED_AUDIO] Audio data size:', data.audioData?.length || 0, 'bytes');
-            console.log('🔊 [TRANSLATED_AUDIO] Player ready:', !!translatedAudioPlayerRef.current);
-            console.log('🔊 ═══════════════════════════════════════════════════════');
-            
-            if (!data.audioData) {
-              console.error('❌ [TRANSLATED_AUDIO] FAILED - No audioData in event');
-              break;
-            }
-            
-            if (!translatedAudioPlayerRef.current) {
-              console.error('❌ [TRANSLATED_AUDIO] FAILED - Player not initialized');
-              break;
-            }
-            
-            // Deduplicate by timestamp and participant
-            const audioId = `audio_${data.fromParticipant}_${data.timestamp}`;
-            if (processedChunkIdsRef.current.has(audioId)) {
-              console.log('⚠️ [TRANSLATED_AUDIO] Duplicate audio detected, skipping:', audioId);
-              break;
-            }
-            
-            processedChunkIdsRef.current.add(audioId);
-            if (processedChunkIdsRef.current.size > 200) {
-              const entries = Array.from(processedChunkIdsRef.current);
-              entries.slice(0, 50).forEach(id => processedChunkIdsRef.current.delete(id));
-            }
-            
-            try {
-              // Resume audio context (autoplay policy)
-              translatedAudioPlayerRef.current.resume();
-              
-              // Check queue size
-              const player = translatedAudioPlayerRef.current;
-              const now = player['ctx'].currentTime;
-              const queueAheadMs = (player['nextStartTime'] - now) * 1000;
-              
-              if (queueAheadMs > 600) {
-                console.warn('⚠️ [TRANSLATED_AUDIO] Queue too large (', queueAheadMs.toFixed(1), 'ms), dropping audio');
-                break;
-              }
-              
-              // Enqueue PCM16 chunk directly
-              player.enqueue(data.audioData);
-              console.log('✅ [TRANSLATED_AUDIO] Successfully enqueued to PCM16Player');
-              console.log('🔊 [TRANSLATED_AUDIO] Playing for participant:', participant.id);
-            } catch (error) {
-              console.error('❌ [TRANSLATED_AUDIO] FAILED to enqueue chunk:', error);
-            }
+            console.log('📝 [MY_TRANSCRIPT] My own words:', data.text);
+            // Pair transcripts by speaker + time window (2s)
+            const msgId = `transcript_${data.speakerId}_${Math.floor(data.timestamp / 2000)}`;
+            setMessages(prev => {
+              const exists = prev.find(m => m.id === msgId);
+              if (exists) return prev;
+              return [...prev, {
+                id: msgId,
+                participantId: data.speakerId,
+                originalText: data.text,
+                translatedText: '',  // will be filled by INCOMING_TRANSCRIPT on other side
+                originalLanguage: participant.language,
+                targetLanguage: participant.language === 'en-US' ? 'fr-CA' : 'en-US',
+                timestamp: new Date(data.timestamp)
+              }];
+            });
             break;
+          }
+
+          case 'INCOMING_TRANSCRIPT': {
+            if (data.type !== 'INCOMING_TRANSCRIPT') break;
+            
+            console.log('📝 [INCOMING_TRANSCRIPT] Translation:', data.text);
+            // This arrives on the LISTENER's side — create or update bubble showing translation
+            const msgId = `transcript_${data.speakerId}_${Math.floor(data.timestamp / 2000)}`;
+            setMessages(prev => {
+              const exists = prev.find(m => m.id === msgId);
+              if (exists) {
+                // Update existing entry with translation
+                return prev.map(m => m.id === msgId
+                  ? { ...m, translatedText: data.text }
+                  : m
+                );
+              }
+              return [...prev, {
+                id: msgId,
+                participantId: data.speakerId,
+                originalText: '',
+                translatedText: data.text,
+                originalLanguage: otherParticipant?.language || 'en-US',
+                targetLanguage: participant.language,
+                timestamp: new Date(data.timestamp)
+              }];
+            });
+            break;
+          }
             
           case 'BILINGUAL_MESSAGE':
             console.log('📨 [BILINGUAL] Received bilingual message:', data.message);
@@ -596,11 +544,11 @@ export function useChatroomConnection({ roomId, participant, onEvent }: UseChatr
   const disconnect = useCallback(() => {
     connectionAttemptRef.current = false;
     
-    // Clean up translated audio player
-    if (translatedAudioPlayerRef.current) {
-      translatedAudioPlayerRef.current.dispose();
-      translatedAudioPlayerRef.current = null;
-    }
+    // Stop mic streaming
+    setMicEnabled(false);
+    
+    // Flush audio queue
+    translationAudio.flush();
     
     if (wsRef.current) {
       wsRef.current.close(1000, 'User disconnected'); // Normal closure
@@ -608,7 +556,7 @@ export function useChatroomConnection({ roomId, participant, onEvent }: UseChatr
     }
     setIsConnected(false);
     setOtherParticipant(null);
-  }, []);
+  }, [translationAudio]);
 
   const sendEvent = useCallback((event: any) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
@@ -859,6 +807,8 @@ export function useChatroomConnection({ roomId, participant, onEvent }: UseChatr
     messages,
     otherParticipant,
     lastTranslation,
+    micEnabled,
+    setMicEnabled,
     connect,
     disconnect,
     sendEvent,
@@ -873,12 +823,12 @@ export function useChatroomConnection({ roomId, participant, onEvent }: UseChatr
     sendAIAudioChunk,
     sendAIAudioEnd,
     sendVoiceActivity,
-    sendRoomAudioData, // NEW: Send mic audio to backend
-    sendStopSpeaking, // NEW: Tell backend to flush audio
+    sendRoomAudioData,
+    sendStopSpeaking,
     startRecording,
     stopRecording,
     requestTranscriptHistory,
     endSession,
-    handleUserGesture // Export user gesture handler
+    handleUserGesture
   };
 }
