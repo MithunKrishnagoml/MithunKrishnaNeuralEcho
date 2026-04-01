@@ -201,6 +201,27 @@ class TranslationSession {
   }
 }
 
+// Helper function to safely send messages to participants
+function safeSend(socket, data, context = '') {
+  if (!socket) {
+    console.warn(`⚠️ [safeSend] ${context} - Socket is null/undefined`);
+    return false;
+  }
+  
+  if (socket.readyState !== WebSocket.OPEN) {
+    console.warn(`⚠️ [safeSend] ${context} - Socket not open, readyState: ${socket.readyState}`);
+    return false;
+  }
+  
+  try {
+    socket.send(JSON.stringify(data));
+    return true;
+  } catch (error) {
+    console.error(`❌ [safeSend] ${context} - Error sending message:`, error);
+    return false;
+  }
+}
+
 function buildTranslationInstructions(inputLang, outputLang) {
   const inputLangName = inputLang === "en" ? "English" : "French";
   const outputLangName = outputLang === "en" ? "English" : "French";
@@ -283,39 +304,45 @@ function wireOpenAIOutput(openaiWs, targetParticipant, session, speakerId) {
 
       // Stream translated audio to target participant in real time
       if (event.type === 'response.audio.delta') {
-        if (targetParticipant.socket?.readyState === WebSocket.OPEN) {
-          targetParticipant.socket.send(JSON.stringify({
+        // Re-fetch target participant to ensure fresh socket reference
+        const freshTarget = session.participants.get(targetParticipant.userId || 
+          Array.from(session.participants.keys()).find(id => id !== speakerId));
+        
+        if (freshTarget) {
+          safeSend(freshTarget.socket, {
             type: 'TRANSLATED_AUDIO_CHUNK',
             audioData: event.delta, // base64 PCM16
             chunkId: `chunk_${speakerId}_${chunkSeq++}`,
             speakerId,
             timestamp: Date.now()
-          }));
+          }, `Audio chunk to target participant`);
         }
       }
 
       // Send transcript to SPEAKER (their own words)
       if (event.type === 'conversation.item.input_audio_transcription.completed') {
         const speakerParticipant = session.participants.get(speakerId);
-        if (speakerParticipant?.socket?.readyState === WebSocket.OPEN) {
-          speakerParticipant.socket.send(JSON.stringify({
-            type: 'MY_TRANSCRIPT',
-            text: event.transcript,
-            speakerId,
-            timestamp: Date.now()
-          }));
-        }
+        safeSend(speakerParticipant?.socket, {
+          type: 'MY_TRANSCRIPT',
+          text: event.transcript,
+          speakerId,
+          timestamp: Date.now()
+        }, `MY_TRANSCRIPT to speaker ${speakerId}`);
       }
 
       // Send translation text to LISTENER (what they're hearing)
       if (event.type === 'response.audio_transcript.done') {
-        if (targetParticipant.socket?.readyState === WebSocket.OPEN) {
-          targetParticipant.socket.send(JSON.stringify({
+        // Re-fetch target participant to ensure fresh socket reference
+        const freshTarget = session.participants.get(targetParticipant.userId || 
+          Array.from(session.participants.keys()).find(id => id !== speakerId));
+        
+        if (freshTarget) {
+          safeSend(freshTarget.socket, {
             type: 'INCOMING_TRANSCRIPT',
             text: event.transcript,
             speakerId,
             timestamp: Date.now()
-          }));
+          }, `INCOMING_TRANSCRIPT to listener`);
         }
       }
     } catch (error) {
@@ -333,12 +360,10 @@ function wireOpenAIOutput(openaiWs, targetParticipant, session, speakerId) {
     
     // Notify participant that translation service disconnected
     const speakerParticipant = session.participants.get(speakerId);
-    if (speakerParticipant?.socket?.readyState === WebSocket.OPEN) {
-      speakerParticipant.socket.send(JSON.stringify({
-        type: 'error',
-        message: 'Translation service disconnected. Please rejoin.'
-      }));
-    }
+    safeSend(speakerParticipant?.socket, {
+      type: 'error',
+      message: 'Translation service disconnected. Please rejoin.'
+    }, `Error notification to speaker ${speakerId}`);
   });
 }
 
@@ -691,48 +716,46 @@ wss.on('connection', (ws, req) => {
         // If this is the first participant, send waiting message
         if (translationSession.participants.size === 1) {
           console.log('⏳ [BACKEND] First participant - sending WAITING_FOR_PARTICIPANT');
-          ws.send(JSON.stringify({
+          safeSend(ws, {
             type: 'WAITING_FOR_PARTICIPANT',
             message: 'Waiting for the other participant to join...',
             sessionId,
             participantCount: 1
-          }));
+          }, 'WAITING_FOR_PARTICIPANT to first participant');
         }
 
         // Notify successful join to the joining user
         console.log('📤 [BACKEND] Sending USER_JOINED_ROOM to joining user:', userId);
-        ws.send(JSON.stringify({ 
+        safeSend(ws, { 
           type: 'USER_JOINED_ROOM', 
           sessionId, 
           userId,
           participantCount: translationSession.participants.size,
           language: language,
           newParticipantName: name
-        }));
+        }, `USER_JOINED_ROOM to joining user ${userId}`);
 
         // Notify all existing participants about the new joiner
         console.log('═══════════════════════════════════════════════════════');
         console.log('📢 [BACKEND] Notifying existing participants about new joiner');
         let notificationCount = 0;
         for (const [existingUserId, participant] of translationSession.participants.entries()) {
-          if (participant.socket?.readyState === WebSocket.OPEN && participant.socket !== ws) {
-            console.log('📤 [BACKEND] Sending USER_JOINED_ROOM notification to:', existingUserId);
-            console.log('📤 [BACKEND] Notification details:', {
-              to: existingUserId,
-              about: userId,
-              aboutName: name,
-              participantCount: translationSession.participants.size
-            });
-            
-            participant.socket.send(JSON.stringify({
+          // Re-fetch participant from Map to ensure fresh socket reference
+          const freshParticipant = translationSession.participants.get(existingUserId);
+          if (freshParticipant && freshParticipant.socket !== ws) {
+            const sent = safeSend(freshParticipant.socket, {
               type: 'USER_JOINED_ROOM',
               sessionId,
               participantCount: translationSession.participants.size,
               newParticipantLanguage: language,
               newParticipantName: name,
               userId: userId
-            }));
-            notificationCount++;
+            }, `USER_JOINED_ROOM notification to ${existingUserId}`);
+            
+            if (sent) {
+              console.log('📤 [BACKEND] Successfully sent USER_JOINED_ROOM notification to:', existingUserId);
+              notificationCount++;
+            }
           }
         }
         console.log('📢 [BACKEND] Sent', notificationCount, 'notifications to existing participants');
@@ -782,19 +805,22 @@ wss.on('connection', (ws, req) => {
             // Notify all participants that translation is ready
             console.log('═══════════════════════════════════════════════════════');
             console.log('📢 [BACKEND] Sending translation_ready to all participants');
+            let readyCount = 0;
             for (const [currentUserId, participant] of translationSession.participants.entries()) {
-              if (participant.socket?.readyState === WebSocket.OPEN) {
+              // Re-fetch participant from Map to ensure fresh socket reference
+              const freshParticipant = translationSession.participants.get(currentUserId);
+              if (freshParticipant) {
                 const otherParticipant = Array.from(translationSession.participants.entries())
                   .find(([userId]) => userId !== currentUserId);
                 
-                console.log('📤 [BACKEND] Sending translation_ready to:', currentUserId);
+                console.log('📤 [BACKEND] Attempting to send translation_ready to:', currentUserId);
                 console.log('📤 [BACKEND] Other participant info:', {
                   id: otherParticipant ? otherParticipant[0] : 'none',
                   name: otherParticipant ? otherParticipant[1].name : 'none',
                   language: otherParticipant ? otherParticipant[1].language : 'none'
                 });
                 
-                participant.socket.send(JSON.stringify({ 
+                const sent = safeSend(freshParticipant.socket, { 
                   type: 'translation_ready',
                   message: 'Both participants connected. Translation is live.',
                   participantCount: 2,
@@ -803,9 +829,17 @@ wss.on('connection', (ws, req) => {
                     name: otherParticipant[1].name || 'Other Participant',
                     language: otherParticipant[1].language
                   } : null
-                }));
+                }, `translation_ready to ${currentUserId}`);
+                
+                if (sent) {
+                  console.log('✅ [BACKEND] translation_ready sent successfully to:', currentUserId);
+                  readyCount++;
+                } else {
+                  console.error('❌ [BACKEND] Failed to send translation_ready to:', currentUserId);
+                }
               }
             }
+            console.log('📢 [BACKEND] Sent translation_ready to', readyCount, 'participants');
             console.log('═══════════════════════════════════════════════════════');
           } catch (error) {
             console.error(`❌ Failed to initialize OpenAI sessions for ${sessionId}:`, error);
