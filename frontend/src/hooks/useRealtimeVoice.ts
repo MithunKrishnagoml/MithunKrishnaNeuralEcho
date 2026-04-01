@@ -695,11 +695,11 @@ export function useRealtimeVoice() {
           // First try with enhanced audio constraints
           stream = await navigator.mediaDevices.getUserMedia({ 
             audio: {
-              noiseSuppression: true,
               echoCancellation: true,
+              noiseSuppression: true,
               autoGainControl: true,
-              sampleRate: 16000,
-              channelCount: 1
+              channelCount: 1,
+              sampleRate: 24000
             }
           });
         } catch (enhancedError) {

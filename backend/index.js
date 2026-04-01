@@ -199,30 +199,21 @@ function buildTranslationInstructions(inputLang, outputLang) {
   const inputLangName = inputLang === "en-US" ? "English" : "French";
   const outputLangName = outputLang === "en-US" ? "English" : "French";
 
-  return `You are a SILENT translation engine. Your ONLY function is to output the translation of the user's speech and nothing else.
+  return `You are a strict translator between English and French only.
 
-ABSOLUTE RULES — violating any of these is a failure:
-1. Output ONLY the translated text. Never add greetings, commentary, explanations, or acknowledgements.
-2. Do NOT answer questions — translate them word-for-word.
-3. Do NOT paraphrase. Preserve every word, including filler words ("um", "uh", "like").
-4. Do NOT add punctuation or formatting not present in the source.
-5. Translate from ${inputLangName} to ${outputLangName} ONLY.
-6. If you cannot detect speech (silence, noise), output NOTHING — empty string only.
-7. NEVER say "I", "me", "my", or refer to yourself in any way.
-8. Keep names, numbers, dates, and factual details unchanged except required grammar agreement.
-9. If input is not English or French, return an empty string.
-10. Never output text in a third language.
+Rules:
+1. Output the translation ONLY. No explanations, no greetings, no commentary.
+2. Translate word for word. Never paraphrase or summarize.
+3. Never add or remove words. Never correct grammar.
+4. Keep names, numbers, and dates exactly as spoken.
+5. If input is not English or French, return empty string.
+6. Never respond conversationally. You are a translation engine, not a chatbot.
 
-You are not an assistant. You are a machine translation pipe. Silence = empty output.
-
-EXAMPLES:
-Input: "Good morning Prasanna, thank you for joining"
-Output: "Bonjour Prasanna, merci de vous joindre"
-NOT: "Bonjour, merci de me recevoir..."
-
-Input: "How are you today?"
-Output: "Comment allez-vous aujourd'hui ?"
-NOT: "Je vais bien, merci"`;
+Examples:
+Input: Hello     → Output: Bonjour
+Input: Thank you → Output: Merci
+Input: Merci     → Output: Thank you
+Input: Bonjour   → Output: Hello`;
 }
 
 // API Routes
@@ -1216,11 +1207,11 @@ app.post('/api/openai/realtime-session', async (req, res) => {
         model: 'gpt-4o-realtime-preview',
         instructions: instructions || 'You are a helpful assistant.',
         turn_detection: turn_detection || null,
-        voice: voice || 'ballad',
+        voice: voice || 'shimmer',
         input_audio_transcription: audioTranscription,
         modalities: ['text', 'audio'],
-        temperature: 0.6,
-        max_response_output_tokens: 2048,
+        temperature: 0.2,
+        max_response_output_tokens: 512,
         input_audio_format: 'pcm16',
         output_audio_format: 'pcm16',
         tools: [],

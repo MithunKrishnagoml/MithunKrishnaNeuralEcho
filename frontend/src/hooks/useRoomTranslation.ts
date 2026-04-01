@@ -6,7 +6,7 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { useAppState } from '@/contexts/AppContext';
 import { ChatroomParticipant } from '@/types/chatroom';
-import { StreamingAudioPlayer } from '@/utils/StreamingAudioPlayer';
+import { PCM16Player } from '@/utils/PCM16Player';
 import { reportAudioError } from '@/utils/StreamingErrorHandler';
 
 interface UseRoomTranslationProps {
@@ -59,27 +59,11 @@ export function useRoomTranslation({
   const lastMessageCountRef = useRef(0);
   const processedMessagesRef = useRef<Set<string>>(new Set());
   const isInitializedRef = useRef(false);
-  const audioPlayerRef = useRef<StreamingAudioPlayer | null>(null);
+  const audioPlayerRef = useRef<PCM16Player | null>(null);
 
   useEffect(() => {
-    audioPlayerRef.current = new StreamingAudioPlayer({
-      sampleRate: 24000,
-      maxQueueSize: 48000 * 10, // 10 seconds
-      debug: false,
-      onError: (error) => {
-        reportAudioError('Streaming audio player error', {
-          roomId,
-          participantId: participant.id,
-          error: error.message,
-        });
-      },
-      onPlaybackStart: () => {
-        console.log('▶️ Room audio playback started');
-      },
-      onPlaybackEnd: () => {
-        console.log('⏹️ Room audio playback ended');
-      }
-    });
+    audioPlayerRef.current = new PCM16Player();
+    console.log('🎵 [PCM16Player] Initialized for room audio playback');
 
     return () => {
       audioPlayerRef.current?.dispose();
@@ -90,7 +74,7 @@ export function useRoomTranslation({
   // Handle user gesture for autoplay policy - trigger on any user interaction
   const handleUserGesture = useCallback(async () => {
     if (audioPlayerRef.current) {
-      await audioPlayerRef.current.handleUserGesture();
+      await audioPlayerRef.current.resume();
       console.log('🎵 User gesture handled for room audio player');
     }
   }, []);
