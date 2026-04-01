@@ -21,6 +21,7 @@ export function useChatroomConnection({ roomId, participant, onEvent }: UseChatr
   const wsRef = useRef<WebSocket | null>(null);
   const connectionAttemptRef = useRef<boolean>(false);
   const translatedAudioPlayerRef = useRef<PCM16Player | null>(null);
+  const processedChunkIdsRef = useRef<Set<string>>(new Set()); // Track processed chunk IDs to prevent duplicates
 
   // Initialize translated audio player with PCM16Player
   useEffect(() => {
@@ -245,14 +246,12 @@ export function useChatroomConnection({ roomId, participant, onEvent }: UseChatr
             console.log('🎵 [AUDIO_CHUNK] Speaker ID:', data.speakerId ?? 'not provided');
             console.log('🎵 [AUDIO_CHUNK] My participant ID:', participant.id);
             console.log('🎵 [AUDIO_CHUNK] Response ID:', data.responseId);
+            console.log('🎵 [AUDIO_CHUNK] Chunk ID:', data.chunkId);
             console.log('🎵 [AUDIO_CHUNK] Audio data size:', data.audioData?.length || 0, 'bytes');
             console.log('🎵 [AUDIO_CHUNK] Player ready:', !!translatedAudioPlayerRef.current);
             console.log('🎵 ═══════════════════════════════════════════════════════');
             
-            // ✅ BUG FIX #1: REMOVED speaker ID filter - both users must hear AI translation
-            // The speaker SHOULD hear their own words translated back to them
-            // That is the core product feature - real-time translation playback
-            
+            // Validation checks
             if (!data.audioData) {
               console.error('❌ [AUDIO_CHUNK] FAILED - No audioData in event');
               break;
@@ -263,15 +262,50 @@ export function useChatroomConnection({ roomId, participant, onEvent }: UseChatr
               break;
             }
             
+            // BUG FIX #2: Deduplicate chunks by chunkId
+            // Backend broadcasts same audio under multiple participant IDs
+            // Only process each unique chunk once
+            const chunkId = data.chunkId || `${data.responseId}_${data.timestamp}`;
+            if (processedChunkIdsRef.current.has(chunkId)) {
+              console.log('⚠️ [AUDIO_CHUNK] Duplicate chunk detected, skipping:', chunkId);
+              break;
+            }
+            
+            // Add to processed set with size limit to prevent memory leak
+            processedChunkIdsRef.current.add(chunkId);
+            if (processedChunkIdsRef.current.size > 200) {
+              // Remove oldest entries (first 50) when limit exceeded
+              const entries = Array.from(processedChunkIdsRef.current);
+              entries.slice(0, 50).forEach(id => processedChunkIdsRef.current.delete(id));
+              console.log('🧹 [AUDIO_CHUNK] Cleaned up old chunk IDs, new size:', processedChunkIdsRef.current.size);
+            }
+            
             try {
               // Resume audio context on first chunk (autoplay policy)
               translatedAudioPlayerRef.current.resume();
               
+              // BUG FIX #3: Check queue size before enqueueing
+              // If queue is too large, drop the chunk to prevent growing latency
+              const player = translatedAudioPlayerRef.current;
+              const now = player['ctx'].currentTime;
+              const queueAheadMs = (player['nextStartTime'] - now) * 1000;
+              
+              if (queueAheadMs > 600) {
+                console.warn('⚠️ [AUDIO_CHUNK] Queue too large (', queueAheadMs.toFixed(1), 'ms), dropping chunk to prevent latency buildup');
+                break;
+              }
+              
               // Enqueue PCM16 chunk directly - no conversion needed
-              translatedAudioPlayerRef.current.enqueue(data.audioData);
+              player.enqueue(data.audioData);
               console.log('✅ [AUDIO_CHUNK] Successfully enqueued to PCM16Player');
+              
+              // BUG FIX #1: Only report error if enqueue actually fails
+              // Success path - no error reporting needed
             } catch (error) {
+              // BUG FIX #1: Only report error in catch block when it actually fails
               console.error('❌ [AUDIO_CHUNK] FAILED to enqueue chunk:', error);
+              // Optionally report to error handler here if needed
+              // reportAudioError('Failed to enqueue audio chunk', { chunkId, error });
             }
             break;
             
@@ -294,12 +328,35 @@ export function useChatroomConnection({ roomId, participant, onEvent }: UseChatr
               break;
             }
             
+            // Deduplicate by timestamp and participant
+            const audioId = `audio_${data.fromParticipant}_${data.timestamp}`;
+            if (processedChunkIdsRef.current.has(audioId)) {
+              console.log('⚠️ [TRANSLATED_AUDIO] Duplicate audio detected, skipping:', audioId);
+              break;
+            }
+            
+            processedChunkIdsRef.current.add(audioId);
+            if (processedChunkIdsRef.current.size > 200) {
+              const entries = Array.from(processedChunkIdsRef.current);
+              entries.slice(0, 50).forEach(id => processedChunkIdsRef.current.delete(id));
+            }
+            
             try {
               // Resume audio context (autoplay policy)
               translatedAudioPlayerRef.current.resume();
               
+              // Check queue size
+              const player = translatedAudioPlayerRef.current;
+              const now = player['ctx'].currentTime;
+              const queueAheadMs = (player['nextStartTime'] - now) * 1000;
+              
+              if (queueAheadMs > 600) {
+                console.warn('⚠️ [TRANSLATED_AUDIO] Queue too large (', queueAheadMs.toFixed(1), 'ms), dropping audio');
+                break;
+              }
+              
               // Enqueue PCM16 chunk directly
-              translatedAudioPlayerRef.current.enqueue(data.audioData);
+              player.enqueue(data.audioData);
               console.log('✅ [TRANSLATED_AUDIO] Successfully enqueued to PCM16Player');
               console.log('🔊 [TRANSLATED_AUDIO] Playing for participant:', participant.id);
             } catch (error) {
