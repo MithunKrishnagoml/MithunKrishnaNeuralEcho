@@ -1,13 +1,26 @@
 import { useRef, useCallback } from 'react';
 
 /**
- * Handles playback of translated audio chunks from backend
- * Replaces PCM16Player with simpler implementation
+ * Real-time conversation audio player
+ * Handles playback of translated audio chunks with interruption support
+ * 
+ * Key differences from streaming player:
+ * - Interrupts old audio when new speech arrives
+ * - Keeps queue minimal (200ms max)
+ * - Prioritizes latest audio over complete playback
+ * - Detects speech boundaries via timestamp gaps
  */
 export function useTranslationAudio() {
   const ctxRef = useRef<AudioContext | null>(null);
   const nextStartTimeRef = useRef<number>(0);
   const seenChunkIds = useRef<Set<string>>(new Set());
+  const lastChunkTimestampRef = useRef<number>(0);
+  const activeSourcesRef = useRef<AudioBufferSourceNode[]>([]);
+  const lastSpeakerIdRef = useRef<string>('');
+
+  // Real-time conversation mode: 200ms max queue (not 600ms)
+  const MAX_QUEUE_MS = 200;
+  const SPEECH_GAP_MS = 300; // Detect new sentence/utterance
 
   const getCtx = useCallback(() => {
     if (!ctxRef.current || ctxRef.current.state === 'closed') {
@@ -25,10 +38,30 @@ export function useTranslationAudio() {
     }
   }, [getCtx]);
 
-  const enqueueChunk = useCallback((base64Audio: string, chunkId: string) => {
+  // CRITICAL: Stop all currently playing audio (barge-in)
+  const stopAllSources = useCallback(() => {
+    activeSourcesRef.current.forEach(source => {
+      try {
+        source.stop();
+        source.disconnect();
+      } catch (e) {
+        // Already stopped
+      }
+    });
+    activeSourcesRef.current = [];
+  }, []);
+
+  // CRITICAL: Interrupt playback when new speech starts
+  const interruptPlayback = useCallback(() => {
+    const ctx = getCtx();
+    stopAllSources();
+    nextStartTimeRef.current = ctx.currentTime;
+    console.log('🔥 [TranslationAudio] INTERRUPTED - new speech detected');
+  }, [getCtx, stopAllSources]);
+
+  const enqueueChunk = useCallback((base64Audio: string, chunkId: string, timestamp?: number) => {
     // Deduplicate
     if (seenChunkIds.current.has(chunkId)) {
-      console.log(`⚠️ [TranslationAudio] Duplicate chunk: ${chunkId}`);
       return;
     }
     seenChunkIds.current.add(chunkId);
@@ -41,17 +74,31 @@ export function useTranslationAudio() {
 
     const ctx = getCtx();
     const now = ctx.currentTime;
+    const chunkTimestamp = timestamp || Date.now();
 
-    // Queue overflow protection — drop if more than 600ms ahead
+    // Extract speaker ID from chunkId (format: chunk_speakerId_seq)
+    const speakerId = chunkId.split('_')[1] || '';
+
+    // CRITICAL: Detect new speech (speaker change OR time gap)
+    const timeSinceLastChunk = chunkTimestamp - lastChunkTimestampRef.current;
+    const isSpeakerChange = speakerId && speakerId !== lastSpeakerIdRef.current;
+    const isNewSpeech = timeSinceLastChunk > SPEECH_GAP_MS || isSpeakerChange;
+
+    if (isNewSpeech && lastChunkTimestampRef.current > 0) {
+      console.log(`🔥 [TranslationAudio] New speech detected (gap: ${timeSinceLastChunk}ms, speaker: ${speakerId})`);
+      interruptPlayback();
+    }
+
+    lastChunkTimestampRef.current = chunkTimestamp;
+    lastSpeakerIdRef.current = speakerId;
+
+    // CRITICAL: Check queue size BEFORE dropping
     const queueAheadMs = (nextStartTimeRef.current - now) * 1000;
-    if (queueAheadMs > 600) {
-      console.warn(`⚠️ [TranslationAudio] Queue overflow (${queueAheadMs.toFixed(0)}ms), dropping chunk`);
-      // Hard reset if critically behind
-      if (queueAheadMs > 1200) {
-        console.warn('⚠️ [TranslationAudio] Critical overflow, resetting queue');
-        nextStartTimeRef.current = 0;
-      }
-      return;
+    
+    // Real-time mode: Drop if queue exceeds 200ms
+    if (queueAheadMs > MAX_QUEUE_MS) {
+      console.warn(`⚠️ [TranslationAudio] Queue overflow (${queueAheadMs.toFixed(0)}ms) - INTERRUPTING`);
+      interruptPlayback();
     }
 
     try {
@@ -76,21 +123,33 @@ export function useTranslationAudio() {
       source.buffer = buffer;
       source.connect(ctx.destination);
 
+      // CRITICAL: Use Math.max to prevent time accumulation issues
       const startAt = Math.max(now + 0.01, nextStartTimeRef.current);
       source.start(startAt);
       nextStartTimeRef.current = startAt + buffer.duration;
 
-      console.log(`✅ [TranslationAudio] Enqueued chunk ${chunkId}, queue: ${queueAheadMs.toFixed(0)}ms`);
+      // Track active source for interruption
+      activeSourcesRef.current.push(source);
+      source.onended = () => {
+        const idx = activeSourcesRef.current.indexOf(source);
+        if (idx > -1) activeSourcesRef.current.splice(idx, 1);
+      };
+
+      const newQueueMs = (nextStartTimeRef.current - now) * 1000;
+      console.log(`✅ [TranslationAudio] Playing chunk ${chunkId}, queue: ${newQueueMs.toFixed(0)}ms`);
     } catch (error) {
       console.error('❌ [TranslationAudio] Failed to enqueue chunk:', error);
     }
-  }, [getCtx]);
+  }, [getCtx, interruptPlayback]);
 
   const flush = useCallback(() => {
+    stopAllSources();
     nextStartTimeRef.current = 0;
     seenChunkIds.current.clear();
-    console.log('🧹 [TranslationAudio] Flushed queue');
-  }, []);
+    lastChunkTimestampRef.current = 0;
+    lastSpeakerIdRef.current = '';
+    console.log('🧹 [TranslationAudio] Flushed queue and stopped all audio');
+  }, [stopAllSources]);
 
-  return { enqueueChunk, resume, flush };
+  return { enqueueChunk, resume, flush, interrupt: interruptPlayback };
 }

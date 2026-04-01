@@ -252,13 +252,15 @@ export function useChatroomConnection({ roomId, participant, onEvent }: UseChatr
             console.log('🎵 [TRANSLATED_AUDIO_CHUNK] Speaker ID:', data.speakerId);
             console.log('🎵 [TRANSLATED_AUDIO_CHUNK] Chunk ID:', data.chunkId);
             console.log('🎵 [TRANSLATED_AUDIO_CHUNK] Audio data size:', data.audioData?.length || 0);
+            console.log('🎵 [TRANSLATED_AUDIO_CHUNK] Timestamp:', data.timestamp);
             
             // This is the ONLY audio event to play — no filtering needed
             // Backend guarantees this is translated audio for this participant only
             if (!data.audioData || !data.chunkId) break;
 
             translationAudio.resume();
-            translationAudio.enqueueChunk(data.audioData, data.chunkId);
+            // Pass timestamp for speech boundary detection
+            translationAudio.enqueueChunk(data.audioData, data.chunkId, data.timestamp);
             break;
           }
 

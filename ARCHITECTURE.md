@@ -324,9 +324,18 @@ export function useTranslationAudio() {
 
 **Features:**
 - Deduplication prevents audio doubling
-- Queue overflow protection (drops if >600ms ahead)
+- **Real-time conversation mode** (200ms max queue, not 600ms)
+- **Automatic interruption** when new speech detected
+- **Speech boundary detection** via timestamp gaps (>300ms)
+- **Barge-in support** - stops old audio when new speech arrives
 - Gapless playback using scheduled start times
 - Handles Base64 → Float32 conversion
+
+**Critical Differences from Streaming Player:**
+- Prioritizes latest audio over complete playback
+- Interrupts old audio instead of buffering
+- Detects speaker changes and sentence boundaries
+- Prevents lag buildup in conversations
 
 #### `useChatroomConnection.ts`
 ```typescript
@@ -496,8 +505,10 @@ export function useChatroomConnection({ roomId, participant, onEvent }) {
 ### Frontend
 1. **AudioWorklet**: Low-latency audio processing (runs on separate thread)
 2. **Continuous Streaming**: No buffering, sends audio every ~5ms
-3. **Gapless Playback**: Pre-scheduled audio chunks prevent gaps
-4. **Deduplication**: Prevents processing same chunk twice
+3. **Real-time Playback**: 200ms max queue (conversation mode, not streaming mode)
+4. **Automatic Interruption**: Stops old audio when new speech arrives
+5. **Speech Boundary Detection**: Detects gaps >300ms to identify new utterances
+6. **Deduplication**: Prevents processing same chunk twice
 
 ### Backend
 1. **Direct Forwarding**: Minimal processing, just route audio
@@ -515,7 +526,12 @@ export function useChatroomConnection({ roomId, participant, onEvent }) {
 - Network (frontend → backend): ~50-100ms
 - OpenAI processing: ~300-500ms
 - Network (backend → frontend): ~50-100ms
-- Audio playback: ~10-20ms
+- Audio playback: ~10-20ms (real-time mode with interruption)
+
+**Key Improvement**: Real-time conversation mode prevents lag buildup by:
+- Interrupting old audio when new speech arrives
+- Keeping queue minimal (200ms vs 600ms)
+- Prioritizing latest audio over complete playback
 
 ---
 
@@ -643,6 +659,25 @@ npm run dev
 - Verify deduplication is working (check `chunkId`)
 - Check for multiple WebSocket connections
 - Verify only one `useTranslationAudio` instance
+
+### Queue Overflow / Audio Lag
+**Symptoms**: Console shows "Queue overflow" warnings, audio feels delayed
+
+**Root Cause**: Audio chunks arriving faster than playback speed, causing lag buildup
+
+**Solution**: The system now uses real-time conversation mode:
+- ✅ Automatically interrupts old audio when new speech arrives
+- ✅ Keeps queue minimal (200ms max, not 600ms)
+- ✅ Detects speech boundaries via timestamp gaps (>300ms)
+- ✅ Prioritizes latest audio over complete playback
+
+**What Changed**:
+- Old behavior: Buffer audio like music streaming → lag buildup
+- New behavior: Interrupt old audio like phone calls → natural conversation
+
+**Verification**: Check console logs for:
+- `🔥 [TranslationAudio] INTERRUPTED - new speech detected`
+- `✅ [TranslationAudio] Playing chunk, queue: <200ms`
 
 ---
 
