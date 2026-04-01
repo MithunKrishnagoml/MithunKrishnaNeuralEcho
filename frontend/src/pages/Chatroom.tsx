@@ -81,17 +81,16 @@ const Chatroom = () => {
       setCurrentRoom(roomId);
       setParticipant(newParticipant);
       
-      // Create shareable link
-      const baseUrl = import.meta.env.VITE_APP_URL || window.location.origin;
-      const shareableLink = `${baseUrl}/join/${roomId}`;
+      // Always use current origin so the link works on any deployment
+      const shareableLink = `${window.location.origin}/join/${roomId}`;
       
-      toast.success(`Room created: ${roomId}`, {
-        description: 'Room is ready! Share the link below with someone.',
+      toast.success(`Room created!`, {
+        description: shareableLink,
         action: {
           label: "Copy Link",
           onClick: () => {
             navigator.clipboard.writeText(shareableLink);
-            toast.success("Shareable link copied to clipboard!");
+            toast.success("Link copied to clipboard!");
           }
         }
       });
