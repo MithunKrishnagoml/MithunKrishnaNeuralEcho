@@ -11,9 +11,9 @@ const createSessionViaBackend = async (config: SessionConfig) => {
   
   const turnDetection = config.voiceMode === "hands-free" ? {
     type: "server_vad",
-    threshold: 0.5, // Balanced sensitivity (0.5 = default, lower = more sensitive)
-    prefix_padding_ms: 300, // Capture 300ms before speech for natural start
-    silence_duration_ms: 700 // Wait 700ms of silence before ending turn (allows natural pauses)
+    threshold: 0.6, // Raised from 0.5 to cut background noise
+    prefix_padding_ms: 200, // Lowered from 300ms
+    silence_duration_ms: 800 // Raised from 700ms — gives Whisper time to finalize
   } : null;
 
   const response = await fetch(REALTIME_SESSION_URL, {
@@ -507,21 +507,19 @@ export function useRealtimeVoice() {
                       callbacksRef.current.onAudioChunk(pcmData, responseId);
                     }
                     
-                    // ❌ DISABLED: In 2-person rooms, AI audio should NOT be relayed through backend
-                    // Each participant hears their own AI directly via WebRTC
-                    // Backend relay would cause duplicate audio (once local, once relayed)
-                    // 
-                    // RELAY TO BACKEND: Send AI audio chunk to all participants
-                    // if (callbacksRef.current?.onAIAudioChunk) {
-                    //   if (sequenceNumber % 50 === 0) {
-                    //     console.log(`🔊 [RELAY] Sending AI audio chunk #${sequenceNumber} to backend (${pcmData.length} bytes)`);
-                    //   }
-                    //   callbacksRef.current.onAIAudioChunk(pcmData, sequenceNumber);
-                    // } else {
-                    //   if (sequenceNumber === 0) {
-                    //     console.error('❌ [RELAY] onAIAudioChunk callback not registered!');
-                    //   }
-                    // }
+                    // ✅ ENABLED: Relay AI audio to the other participant via backend
+                    // User A's OpenAI session produces the translation audio for User A's speech.
+                    // User B needs to hear this audio — User B's own OpenAI session doesn't produce it.
+                    if (callbacksRef.current?.onAIAudioChunk) {
+                      if (sequenceNumber % 50 === 0) {
+                        console.log(`🔊 [RELAY] Sending AI audio chunk #${sequenceNumber} to backend (${pcmData.length} bytes)`);
+                      }
+                      callbacksRef.current.onAIAudioChunk(pcmData, sequenceNumber);
+                    } else {
+                      if (sequenceNumber === 0) {
+                        console.error('❌ [RELAY] onAIAudioChunk callback not registered!');
+                      }
+                    }
                   },
                   // onStreamEnd callback
                   (responseId: string) => {
@@ -710,18 +708,61 @@ export function useRealtimeVoice() {
           
           // Handle audio data from worklet
           let audioChunkCount = 0;
+          let totalBytesSent = 0;
+          let speechSessionStart: number | null = null;
+
           micWorkletNode.port.onmessage = (event) => {
             const { type, data } = event.data;
             
             if (type === 'AUDIO_DATA' && dcRef.current?.readyState === 'open') {
-              // Log every 100th chunk to avoid spam
-              if (audioChunkCount % 100 === 0) {
-                console.log(`🎤 [MIC AUDIO] Sending chunk #${audioChunkCount} to OpenAI (${data.byteLength} bytes)`);
-              }
-              audioChunkCount++;
-              
-              // Convert Int16Array buffer to base64
               const int16Array = new Int16Array(data);
+
+              // ─────────────────────────────────────────────────────────────
+              // 🎙️ HUMAN MIC AUDIO → OPENAI LOGGING
+              // Logs what the human is actually sending into OpenAI's brain.
+              // Runs on every chunk but detailed stats only every 50 chunks.
+              // ─────────────────────────────────────────────────────────────
+
+              // Track session start time for the first chunk
+              if (audioChunkCount === 0) {
+                speechSessionStart = Date.now();
+                console.log('🎙️ ════════════════════════════════════════════════════');
+                console.log('🎙️ [OPENAI INPUT] NEW SPEECH SESSION STARTED');
+                console.log('🎙️ [OPENAI INPUT] Audio format: PCM16, 16kHz, Mono');
+                console.log('🎙️ ════════════════════════════════════════════════════');
+              }
+
+              // Compute RMS energy and peak amplitude of this chunk
+              let sumSquares = 0;
+              let peak = 0;
+              for (let i = 0; i < int16Array.length; i++) {
+                const normalized = int16Array[i] / 32768; // normalize to -1..1
+                sumSquares += normalized * normalized;
+                const abs = Math.abs(normalized);
+                if (abs > peak) peak = abs;
+              }
+              const rms = Math.sqrt(sumSquares / int16Array.length);
+              const durationMs = (int16Array.length / 16000) * 1000; // 16kHz sample rate
+              totalBytesSent += data.byteLength;
+
+              // Detailed log every 50 chunks (~650ms of audio at 16kHz/128 samples)
+              if (audioChunkCount % 50 === 0) {
+                const elapsedMs = speechSessionStart ? Date.now() - speechSessionStart : 0;
+                console.log(
+                  `🎙️ [OPENAI INPUT] chunk #${audioChunkCount} | ` +
+                  `samples: ${int16Array.length} | ` +
+                  `duration: ${durationMs.toFixed(1)}ms | ` +
+                  `RMS energy: ${rms.toFixed(4)} | ` +
+                  `peak: ${peak.toFixed(4)} | ` +
+                  `bytes: ${data.byteLength} | ` +
+                  `total sent: ${(totalBytesSent / 1024).toFixed(1)}KB | ` +
+                  `session elapsed: ${elapsedMs}ms`
+                );
+              }
+
+              audioChunkCount++;
+
+              // Convert Int16Array buffer to base64
               const uint8Array = new Uint8Array(int16Array.buffer);
               let binaryString = '';
               for (let i = 0; i < uint8Array.length; i++) {
@@ -734,6 +775,7 @@ export function useRealtimeVoice() {
                 type: 'input_audio_buffer.append',
                 audio: base64Audio
               }));
+
             } else if (type === 'AUDIO_DATA' && dcRef.current?.readyState !== 'open') {
               if (audioChunkCount === 0) {
                 console.error('❌ [MIC AUDIO] DataChannel not open! Cannot send audio to OpenAI. State:', dcRef.current?.readyState);
@@ -1076,6 +1118,10 @@ export function useRealtimeVoice() {
     try {
       console.log('✅ [commitTurn] Mic held for sufficient duration, committing turn');
       console.log('✅ [commitTurn] Sending input_audio_buffer.commit and response.create');
+      console.log('🎙️ ════════════════════════════════════════════════════');
+      console.log('🎙️ [OPENAI INPUT] AUDIO COMMITTED — OpenAI now processing mic audio');
+      console.log('🎙️ [OPENAI INPUT] Whisper will transcribe → GPT-4o will translate');
+      console.log('🎙️ ════════════════════════════════════════════════════');
       dcRef.current.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
       dcRef.current.send(JSON.stringify({ type: "response.create" }));
       return true;
