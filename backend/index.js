@@ -654,13 +654,25 @@ wss.on('connection', (ws, req) => {
         const { sessionId, userId, language } = data;
         const name = data.name || 'Anonymous';
         
+        console.log('═══════════════════════════════════════════════════════');
+        console.log('📥 [BACKEND] join_session request received');
+        console.log('📥 [BACKEND] Session ID:', sessionId);
+        console.log('📥 [BACKEND] User ID:', userId);
+        console.log('📥 [BACKEND] User Name:', name);
+        console.log('📥 [BACKEND] Language:', language);
+        console.log('═══════════════════════════════════════════════════════');
+        
         const translationSession = translationSessions.get(sessionId);
         if (!translationSession) {
+          console.error('❌ [BACKEND] Session not found:', sessionId);
           ws.send(JSON.stringify({ type: 'error', message: 'Session not found' }));
           return;
         }
 
+        console.log('✅ [BACKEND] Session found. Current participants:', translationSession.participants.size);
+        
         if (translationSession.participants.size >= 2) {
+          console.error('❌ [BACKEND] Session is full');
           ws.send(JSON.stringify({ type: 'error', message: 'Session is full' }));
           return;
         }
@@ -669,20 +681,26 @@ wss.on('connection', (ws, req) => {
         translationSession.addParticipant(userId, language, ws, name);
         activeConnections.set(ws, { sessionId, userId });
 
-        console.log(`👤 Participant ${userId} joined session ${sessionId}. Total participants: ${translationSession.participants.size}`);
+        console.log('═══════════════════════════════════════════════════════');
+        console.log('👤 [BACKEND] Participant added successfully');
+        console.log('👤 [BACKEND] User ID:', userId);
+        console.log('👤 [BACKEND] Total participants now:', translationSession.participants.size);
+        console.log('👤 [BACKEND] All participant IDs:', Array.from(translationSession.participants.keys()));
+        console.log('═══════════════════════════════════════════════════════');
 
         // If this is the first participant, send waiting message
         if (translationSession.participants.size === 1) {
+          console.log('⏳ [BACKEND] First participant - sending WAITING_FOR_PARTICIPANT');
           ws.send(JSON.stringify({
             type: 'WAITING_FOR_PARTICIPANT',
             message: 'Waiting for the other participant to join...',
             sessionId,
             participantCount: 1
           }));
-          console.log(`⏳ Session ${sessionId} waiting for second participant`);
         }
 
-        // Notify successful join
+        // Notify successful join to the joining user
+        console.log('📤 [BACKEND] Sending USER_JOINED_ROOM to joining user:', userId);
         ws.send(JSON.stringify({ 
           type: 'USER_JOINED_ROOM', 
           sessionId, 
@@ -693,8 +711,19 @@ wss.on('connection', (ws, req) => {
         }));
 
         // Notify all existing participants about the new joiner
-        for (const participant of translationSession.participants.values()) {
+        console.log('═══════════════════════════════════════════════════════');
+        console.log('📢 [BACKEND] Notifying existing participants about new joiner');
+        let notificationCount = 0;
+        for (const [existingUserId, participant] of translationSession.participants.entries()) {
           if (participant.socket?.readyState === WebSocket.OPEN && participant.socket !== ws) {
+            console.log('📤 [BACKEND] Sending USER_JOINED_ROOM notification to:', existingUserId);
+            console.log('📤 [BACKEND] Notification details:', {
+              to: existingUserId,
+              about: userId,
+              aboutName: name,
+              participantCount: translationSession.participants.size
+            });
+            
             participant.socket.send(JSON.stringify({
               type: 'USER_JOINED_ROOM',
               sessionId,
@@ -703,8 +732,11 @@ wss.on('connection', (ws, req) => {
               newParticipantName: name,
               userId: userId
             }));
+            notificationCount++;
           }
         }
+        console.log('📢 [BACKEND] Sent', notificationCount, 'notifications to existing participants');
+        console.log('═══════════════════════════════════════════════════════');
 
         // Send conversation history to new participant
         if (translationSession.messageHistory && translationSession.messageHistory.length > 0) {
@@ -718,9 +750,15 @@ wss.on('connection', (ws, req) => {
 
         // Initialize OpenAI sessions when both participants join
         if (translationSession.participants.size === 2) {
-          console.log(`🚀 Session ${sessionId} now has 2 participants! Initializing OpenAI sessions...`);
+          console.log('═══════════════════════════════════════════════════════');
+          console.log('🚀 [BACKEND] TWO PARTICIPANTS DETECTED!');
+          console.log('🚀 [BACKEND] Session:', sessionId);
+          console.log('🚀 [BACKEND] Initializing OpenAI sessions...');
           
           const [userA, userB] = Array.from(translationSession.participants.entries());
+          console.log('🚀 [BACKEND] User A:', userA[0], '(', userA[1].name, ')', userA[1].language);
+          console.log('🚀 [BACKEND] User B:', userB[0], '(', userB[1].name, ')', userB[1].language);
+          console.log('═══════════════════════════════════════════════════════');
           
           // Normalize language codes (en-US → en, fr-CA → fr)
           const langA = userA[1].language.toLowerCase().startsWith('en') ? 'en' : 'fr';
@@ -739,13 +777,22 @@ wss.on('connection', (ws, req) => {
             wireOpenAIOutput(sessionA, userB[1], translationSession, userA[0]);
             wireOpenAIOutput(sessionB, userA[1], translationSession, userB[0]);
             
-            console.log(`✅ OpenAI sessions initialized for ${sessionId}`);
+            console.log('✅ [BACKEND] OpenAI sessions initialized successfully');
             
             // Notify all participants that translation is ready
+            console.log('═══════════════════════════════════════════════════════');
+            console.log('📢 [BACKEND] Sending translation_ready to all participants');
             for (const [currentUserId, participant] of translationSession.participants.entries()) {
               if (participant.socket?.readyState === WebSocket.OPEN) {
                 const otherParticipant = Array.from(translationSession.participants.entries())
                   .find(([userId]) => userId !== currentUserId);
+                
+                console.log('📤 [BACKEND] Sending translation_ready to:', currentUserId);
+                console.log('📤 [BACKEND] Other participant info:', {
+                  id: otherParticipant ? otherParticipant[0] : 'none',
+                  name: otherParticipant ? otherParticipant[1].name : 'none',
+                  language: otherParticipant ? otherParticipant[1].language : 'none'
+                });
                 
                 participant.socket.send(JSON.stringify({ 
                   type: 'translation_ready',
@@ -759,6 +806,7 @@ wss.on('connection', (ws, req) => {
                 }));
               }
             }
+            console.log('═══════════════════════════════════════════════════════');
           } catch (error) {
             console.error(`❌ Failed to initialize OpenAI sessions for ${sessionId}:`, error);
             
