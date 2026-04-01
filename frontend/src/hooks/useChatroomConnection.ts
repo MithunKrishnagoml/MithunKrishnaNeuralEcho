@@ -137,16 +137,24 @@ export function useChatroomConnection({ roomId, participant, onEvent }: UseChatr
             console.log('✅ Current participant ID:', participant.id);
             console.log('✅ Joining user ID:', data.userId);
             
-            // Set other participant if someone else joined
-            if (data.participantCount === 2 && data.userId !== participant.id) {
-              console.log('✅ Setting other participant with name:', data.newParticipantName);
-              setOtherParticipant({
-                id: data.userId || 'other-participant',
-                name: data.newParticipantName || 'Other Participant',
-                language: data.newParticipantLanguage || (participant.language === 'en-US' ? 'fr-CA' : 'en-US'),
-                joinedAt: new Date(),
-                isConnected: true
-              });
+            // Set other participant if someone else joined OR if we're the second person joining
+            if (data.participantCount === 2) {
+              // If this is notification about someone else joining (userId !== my id)
+              if (data.userId !== participant.id) {
+                console.log('✅ Setting other participant (someone joined after me):', data.newParticipantName);
+                setOtherParticipant({
+                  id: data.userId || 'other-participant',
+                  name: data.newParticipantName || 'Other Participant',
+                  language: data.newParticipantLanguage || (participant.language === 'en-US' ? 'fr-CA' : 'en-US'),
+                  joinedAt: new Date(),
+                  isConnected: true
+                });
+              }
+              // If this is my own join confirmation and room already has 2 people,
+              // the other participant info will come in translation_ready event
+              else {
+                console.log('✅ I joined a room with 2 people - waiting for translation_ready with other participant info');
+              }
             } else {
               console.log('✅ Not setting other participant. Reason:', {
                 participantCount: data.participantCount,
@@ -158,9 +166,11 @@ export function useChatroomConnection({ roomId, participant, onEvent }: UseChatr
           case 'translation_ready':
             console.log('✅ Translation session is ready with 2 participants');
             console.log('✅ Both participants are now connected!');
+            console.log('✅ Other participant data from backend:', data.otherParticipant);
             
-            // Set other participant if not already set
-            if (!otherParticipant && data.otherParticipant) {
+            // ALWAYS set other participant from translation_ready event (backend provides accurate info)
+            if (data.otherParticipant) {
+              console.log('✅ Setting other participant from translation_ready:', data.otherParticipant.name);
               setOtherParticipant({
                 id: data.otherParticipant.id,
                 name: data.otherParticipant.name,
@@ -168,6 +178,8 @@ export function useChatroomConnection({ roomId, participant, onEvent }: UseChatr
                 joinedAt: new Date(),
                 isConnected: true
               });
+            } else if (!otherParticipant) {
+              console.warn('⚠️ translation_ready received but no otherParticipant data provided');
             }
             
             // Start streaming mic audio to backend
