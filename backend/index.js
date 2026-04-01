@@ -344,6 +344,69 @@ function wireOpenAIOutput(openaiWs, targetParticipant, session, speakerId) {
 
 // API Routes
 
+// Create OpenAI Realtime session (ephemeral token for WebRTC)
+app.post('/api/openai/realtime-session', async (req, res) => {
+  try {
+    const config = req.body;
+    
+    // Validate OpenAI API key
+    if (!process.env.OPENAI_API_KEY) {
+      return res.status(500).json({ 
+        error: 'OpenAI API key not configured',
+        message: 'Server is missing OPENAI_API_KEY environment variable'
+      });
+    }
+
+    console.log('🔧 [OpenAI Session] Creating ephemeral token for WebRTC');
+    
+    // Create ephemeral token via OpenAI API
+    const response = await fetch('https://api.openai.com/v1/realtime/sessions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o-realtime-preview-2024-12-17',
+        voice: config.voice || 'alloy',
+        instructions: config.instructions,
+        input_audio_format: config.input_audio_format || 'pcm16',
+        output_audio_format: config.output_audio_format || 'pcm16',
+        input_audio_transcription: config.input_audio_transcription,
+        turn_detection: config.turn_detection,
+        modalities: config.modalities || ['text', 'audio'],
+        max_response_output_tokens: config.max_response_output_tokens
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+      console.error('❌ [OpenAI Session] Failed to create session:', {
+        status: response.status,
+        error: errorData
+      });
+      
+      return res.status(response.status).json({
+        error: 'Failed to create OpenAI session',
+        message: errorData.error?.message || errorData.message || 'Unknown error',
+        details: errorData
+      });
+    }
+
+    const sessionData = await response.json();
+    console.log('✅ [OpenAI Session] Ephemeral token created successfully');
+    
+    res.json(sessionData);
+
+  } catch (error) {
+    console.error('❌ [OpenAI Session] Error:', error);
+    res.status(500).json({ 
+      error: 'Internal server error',
+      message: error.message 
+    });
+  }
+});
+
 // Create a new translation session
 app.post('/api/session/create', (req, res) => {
   try {
