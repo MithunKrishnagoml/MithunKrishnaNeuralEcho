@@ -1203,15 +1203,14 @@ app.get('/api/session/:roomId/status', (req, res) => {
 // Create OpenAI Realtime Session endpoint (for frontend WebRTC)
 app.post('/api/openai/realtime-session', async (req, res) => {
   try {
-    const { instructions, turn_detection, voice, input_audio_transcription, modalities, temperature, max_response_output_tokens, input_audio_format, output_audio_format } = req.body;
+    const { instructions, turn_detection, voice, input_audio_transcription, modalities, max_response_output_tokens, input_audio_format, output_audio_format } = req.body;
     
     console.log('🔧 [OpenAI Session] Request received');
+    console.log('🔧 [OpenAI Session] Request body:', JSON.stringify(req.body, null, 2));
     console.log('🔧 [OpenAI Session] Checking for OPENAI_API_KEY...');
-    console.log('🔧 [OpenAI Session] Available env vars with OPENAI:', Object.keys(process.env).filter(k => k.includes('OPENAI')));
     
     if (!process.env.OPENAI_API_KEY) {
       console.error('❌ [OpenAI Session] OPENAI_API_KEY not found in environment variables');
-      console.error('❌ [OpenAI Session] All env vars:', Object.keys(process.env).join(', '));
       return res.status(500).json({ 
         error: 'OpenAI API key not configured on server',
         hint: 'Please set OPENAI_API_KEY environment variable in Render dashboard'
@@ -1219,11 +1218,34 @@ app.post('/api/openai/realtime-session', async (req, res) => {
     }
 
     console.log('✅ [OpenAI Session] OPENAI_API_KEY found, creating realtime session');
-    console.log('🔧 [OpenAI Session] API Key (first 10 chars):', process.env.OPENAI_API_KEY.substring(0, 10) + '...');
 
     // CRITICAL: Forward language hint to Whisper to prevent wrong-language transcripts
     const audioTranscription = input_audio_transcription || { model: 'whisper-1' };
-    console.log('🔧 [OpenAI Session] Whisper config:', audioTranscription);
+    console.log('🔧 [OpenAI Session] Whisper config:', JSON.stringify(audioTranscription));
+
+    // Build request payload according to OpenAI Realtime API spec
+    // Reference: https://platform.openai.com/docs/api-reference/realtime
+    const requestPayload = {
+      model: 'gpt-4o-realtime-preview-2024-12-17',
+      modalities: modalities || ['text', 'audio'],
+      instructions: instructions || 'You are a helpful assistant.',
+      voice: voice || 'alloy',
+      input_audio_format: input_audio_format || 'pcm16',
+      output_audio_format: output_audio_format || 'pcm16',
+      input_audio_transcription: audioTranscription,
+      turn_detection: turn_detection || null,
+      tools: [],
+      tool_choice: 'none',
+      // temperature is NOT supported in Realtime API - removed
+      // max_response_output_tokens: Supported, but optional
+    };
+
+    // Only include max_response_output_tokens if explicitly provided
+    if (max_response_output_tokens !== undefined) {
+      requestPayload.max_response_output_tokens = max_response_output_tokens;
+    }
+
+    console.log('🔧 [OpenAI Session] Sending request to OpenAI:', JSON.stringify(requestPayload, null, 2));
 
     const response = await fetch('https://api.openai.com/v1/realtime/sessions', {
       method: 'POST',
@@ -1231,39 +1253,40 @@ app.post('/api/openai/realtime-session', async (req, res) => {
         'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        model: 'gpt-4o-realtime-preview',
-        instructions: instructions || 'You are a helpful assistant.',
-        turn_detection: turn_detection || null,
-        voice: voice || 'shimmer',
-        input_audio_transcription: audioTranscription,
-        modalities: ['text', 'audio'],
-        temperature: 0.2,
-        max_response_output_tokens: 512,
-        input_audio_format: 'pcm16',
-        output_audio_format: 'pcm16',
-        tools: [],
-        tool_choice: 'none'
-      }),
+      body: JSON.stringify(requestPayload),
     });
 
     if (!response.ok) {
-      const errorText = await response.text();
-      console.error('❌ [OpenAI Session] Failed to create session:', response.status, errorText);
+      // Parse error response for detailed logging
+      let errorDetails;
+      try {
+        errorDetails = await response.json();
+        console.error('❌ [OpenAI Session] OpenAI API Error Response:', JSON.stringify(errorDetails, null, 2));
+      } catch (parseError) {
+        const errorText = await response.text();
+        console.error('❌ [OpenAI Session] OpenAI API Error (raw):', errorText);
+        errorDetails = { message: errorText };
+      }
+
+      // Return detailed error to frontend
       return res.status(response.status).json({ 
-        error: `Failed to create OpenAI session: ${response.status}`,
-        details: errorText 
+        error: `OpenAI API returned ${response.status}`,
+        message: errorDetails?.error?.message || errorDetails?.message || 'Unknown error',
+        details: errorDetails,
+        hint: response.status === 400 ? 'Invalid request parameters. Check console for details.' : undefined
       });
     }
 
     const data = await response.json();
     console.log('✅ [OpenAI Session] Session created successfully');
+    console.log('✅ [OpenAI Session] Session ID:', data.id);
     res.json(data);
   } catch (error) {
-    console.error('❌ [OpenAI Session] Error creating session:', error);
+    console.error('❌ [OpenAI Session] Unexpected error:', error);
     res.status(500).json({ 
       error: 'Internal server error',
-      message: error.message 
+      message: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
     });
   }
 });

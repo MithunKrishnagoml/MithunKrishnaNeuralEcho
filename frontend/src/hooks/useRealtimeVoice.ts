@@ -17,30 +17,46 @@ const createSessionViaBackend = async (config: SessionConfig) => {
     silence_duration_ms: 500 // Waits longer before cutting - gets full sentences
   } : null;
 
+  // Map language codes: en-US → en, fr-CA → fr
+  const languageCode = config.language ? config.language.split('-')[0] : 'en';
+  console.log('🔧 [WebRTC] Language mapping:', config.language, '→', languageCode);
+
+  const requestBody = {
+    instructions: config.instructions + "\n\nTranscribe exactly what is said. Do not correct grammar. Do not add punctuation that was not implied by speech. Do not skip filler words like 'um', 'uh', 'er'. Do not combine two separate utterances into one sentence.",
+    turn_detection: turnDetection,
+    voice: config.voice || 'alloy',
+    modalities: ['text', 'audio'],
+    input_audio_transcription: {
+      model: "whisper-1",
+      language: languageCode // Pass language hint to prevent hallucination
+    },
+    // temperature is NOT supported in Realtime API - removed
+    max_response_output_tokens: 512, // Forces concise, direct translation
+    input_audio_format: 'pcm16',
+    output_audio_format: 'pcm16',
+  };
+
+  console.log('🔧 [WebRTC] Request payload:', JSON.stringify(requestBody, null, 2));
+
   const response = await fetch(REALTIME_SESSION_URL, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({
-      instructions: config.instructions + "\n\nTranscribe exactly what is said. Do not correct grammar. Do not add punctuation that was not implied by speech. Do not skip filler words like 'um', 'uh', 'er'. Do not combine two separate utterances into one sentence.",
-      turn_detection: turnDetection,
-      voice: config.voice || "shimmer", // Changed from 'ballad' to 'shimmer' for warmer, more natural voice
-      modalities: ['text', 'audio'],
-      input_audio_transcription: {
-        model: "whisper-1",
-        language: config.language || "en" // Always pass language hint to prevent hallucination
-      },
-      temperature: 0.2, // Lower temperature for more literal transcription and translation
-      max_response_output_tokens: 512, // Reduced from 2048 - forces concise, direct translation
-      input_audio_format: 'pcm16',
-      output_audio_format: 'pcm16',
-    }),
+    body: JSON.stringify(requestBody),
   });
 
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
-    throw new Error(`Backend session creation failed: ${response.status} - ${errorData.error || errorData.message || 'Unknown error'}`);
+    console.error('❌ [WebRTC] Backend session creation failed:', {
+      status: response.status,
+      error: errorData
+    });
+    
+    // Return detailed error message
+    const errorMessage = errorData.message || errorData.error || 'Unknown error';
+    const errorDetails = errorData.details ? `\nDetails: ${JSON.stringify(errorData.details)}` : '';
+    throw new Error(`Backend session creation failed: ${response.status} - ${errorMessage}${errorDetails}`);
   }
 
   const data = await response.json();
