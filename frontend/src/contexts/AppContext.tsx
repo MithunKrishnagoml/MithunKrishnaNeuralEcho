@@ -295,7 +295,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const startTimeRef = useRef(0);
   const currentMessageIdRef = useRef<string | null>(null); // Track current message being processed
 
-  const { initSession, attachCallbacks, stopSession, commitTurn, enableMic, disableMic, toggleMute: toggleMuteHook, isMuted, isConnected, sessionState, currentDbLevel, setDbThreshold: setDbThresholdHook, getMediaStreams } = useRealtimeVoice();
+  const { initSession, attachCallbacks, stopSession, commitTurn, enableMic, disableMic, toggleMute: toggleMuteHook, isMuted, isConnected, sessionState, currentDbLevel, setDbThreshold: setDbThresholdHook, getMediaStreams, saveAudioEnabled, setSaveAudioEnabled } = useRealtimeVoice();
   
   // Track VAD speaking state
   const [isSpeaking, setIsSpeaking] = useState(false);

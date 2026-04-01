@@ -110,8 +110,21 @@ const Index = () => {
       </div>
 
       {/* Footer */}
-      <footer className="border-t border-border/50 py-2 px-5 text-center">
+      <footer className="border-t border-border/50 py-2 px-5 flex items-center justify-between">
         <p className="text-xs text-muted-foreground/40 tracking-wide">Neuralgo, Inc.  Internal & Confidential</p>
+        
+        {/* Debug toggle - only visible in development */}
+        {import.meta.env.DEV && (
+          <label className="flex items-center gap-2 text-xs text-muted-foreground/60 hover:text-muted-foreground cursor-pointer">
+            <input
+              type="checkbox"
+              checked={t.saveAudioEnabled}
+              onChange={(e) => t.setSaveAudioEnabled(e.target.checked)}
+              className="w-3 h-3 rounded border-border"
+            />
+            <span>Save pre-OpenAI audio</span>
+          </label>
+        )}
       </footer>
 
       {/* Mode selection modal */}

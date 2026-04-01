@@ -1,6 +1,7 @@
 import { useRef, useCallback, useState } from "react";
 import { BACKEND_URL } from "@/lib/config";
 import { RealtimeAudioTap } from "@/utils/RealtimeAudioTap";
+import { computeRMS, computePeak, saveAsWav } from "@/utils/audioUtils";
 
 // Backend endpoint for creating OpenAI realtime sessions
 const REALTIME_SESSION_URL = `${BACKEND_URL}/api/openai/realtime-session`;
@@ -117,6 +118,15 @@ export function useRealtimeVoice() {
   const [sessionState, setSessionState] = useState<SessionState>("disconnected");
   const [currentDbLevel, setCurrentDbLevel] = useState<number | null>(null);
   const [isMuted, setIsMuted] = useState(false); // Hands-free mute state
+
+  // Audio saving state
+  const [saveAudioEnabled, setSaveAudioEnabled] = useState(false);
+  const utteranceBufferRef = useRef<number[]>([]); // Accumulate Float32 samples per utterance
+  const utteranceCounterRef = useRef(0);
+  const savedCountRef = useRef(0);
+  const lastSilenceLogRef = useRef(0);
+  const chunkCounterRef = useRef(0);
+  const isInUtteranceRef = useRef(false);
 
   const transcriptRef = useRef("");
   const responseRef = useRef("");
@@ -272,11 +282,36 @@ export function useRealtimeVoice() {
       if (event.type === "input_audio_buffer.speech_started") {
         speechDetectedRef.current = true;
         cbs.onVoiceActivityStarted?.();
+        
+        // Start new utterance
+        isInUtteranceRef.current = true;
+        utteranceBufferRef.current = [];
+        utteranceCounterRef.current++;
+        console.log('[PRE-OPENAI AUDIO] === NEW UTTERANCE STARTED ===', {
+          utteranceIndex: utteranceCounterRef.current,
+          timestamp: new Date().toISOString()
+        });
       }
 
       if (event.type === "input_audio_buffer.speech_stopped") {
         speechDetectedRef.current = false;
         cbs.onVoiceActivityStopped?.();
+        
+        // End utterance and save if enabled
+        if (isInUtteranceRef.current && utteranceBufferRef.current.length > 0) {
+          isInUtteranceRef.current = false;
+          
+          // Save audio if toggle is enabled and under limit
+          if (saveAudioEnabled && savedCountRef.current < 10) {
+            const float32Array = new Float32Array(utteranceBufferRef.current);
+            saveAsWav(float32Array, 16000, utteranceCounterRef.current);
+            savedCountRef.current++;
+          } else if (savedCountRef.current >= 10) {
+            console.warn('[PRE-OPENAI AUDIO] Save limit reached (10). Toggle off and on to reset.');
+          }
+          
+          utteranceBufferRef.current = [];
+        }
       }
 
       if (event.type === "conversation.item.input_audio_transcription.delta") {
@@ -699,6 +734,18 @@ export function useRealtimeVoice() {
         stream.getTracks().forEach((track) => {
           track.enabled = true; // Start unmuted
           pc.addTrack(track, stream);
+          
+          // Log mic stream acquisition
+          const settings = track.getSettings();
+          console.log('[PRE-OPENAI AUDIO] Mic stream acquired', {
+            trackLabel: track.label,
+            trackId: track.id,
+            sampleRate: settings.sampleRate,
+            channelCount: settings.channelCount,
+            echoCancellation: settings.echoCancellation,
+            noiseSuppression: settings.noiseSuppression,
+            autoGainControl: settings.autoGainControl
+          });
         });
         console.log('🎤 [WebRTC] Microphone tracks added - starting UNMUTED (hands-free)');
         
@@ -737,51 +784,56 @@ export function useRealtimeVoice() {
               const int16Array = new Int16Array(data);
 
               // ─────────────────────────────────────────────────────────────
-              // 🎙️ HUMAN MIC AUDIO → OPENAI LOGGING
-              // Logs what the human is actually sending into OpenAI's brain.
-              // Runs on every chunk but detailed stats only every 50 chunks.
+              // 🎙️ PRE-OPENAI AUDIO LOGGING & SAVING
+              // Comprehensive logging of exactly what audio enters OpenAI
               // ─────────────────────────────────────────────────────────────
 
-              // Track session start time for the first chunk
-              if (audioChunkCount === 0) {
-                speechSessionStart = Date.now();
-                console.log('🎙️ ════════════════════════════════════════════════════');
-                console.log('🎙️ [OPENAI INPUT] NEW SPEECH SESSION STARTED');
-                console.log('🎙️ [OPENAI INPUT] Audio format: PCM16, 16kHz, Mono');
-                console.log('🎙️ ════════════════════════════════════════════════════');
-              }
-
-              // Compute RMS energy and peak amplitude of this chunk
-              let sumSquares = 0;
-              let peak = 0;
+              // Convert Int16 to Float32 for analysis
+              const float32Array = new Float32Array(int16Array.length);
               for (let i = 0; i < int16Array.length; i++) {
-                const normalized = int16Array[i] / 32768; // normalize to -1..1
-                sumSquares += normalized * normalized;
-                const abs = Math.abs(normalized);
-                if (abs > peak) peak = abs;
-              }
-              const rms = Math.sqrt(sumSquares / int16Array.length);
-              const durationMs = (int16Array.length / 16000) * 1000; // 16kHz sample rate
-              totalBytesSent += data.byteLength;
-
-              // Detailed log every 50 chunks (~650ms of audio at 16kHz/128 samples)
-              if (audioChunkCount % 50 === 0) {
-                const elapsedMs = speechSessionStart ? Date.now() - speechSessionStart : 0;
-                console.log(
-                  `🎙️ [OPENAI INPUT] chunk #${audioChunkCount} | ` +
-                  `samples: ${int16Array.length} | ` +
-                  `duration: ${durationMs.toFixed(1)}ms | ` +
-                  `RMS energy: ${rms.toFixed(4)} | ` +
-                  `peak: ${peak.toFixed(4)} | ` +
-                  `bytes: ${data.byteLength} | ` +
-                  `total sent: ${(totalBytesSent / 1024).toFixed(1)}KB | ` +
-                  `session elapsed: ${elapsedMs}ms`
-                );
+                float32Array[i] = int16Array[i] / 32768.0;
               }
 
-              audioChunkCount++;
+              // Compute audio metrics
+              const rms = computeRMS(float32Array);
+              const peak = computePeak(float32Array);
+              const isSilent = rms < 0.001;
+              const sampleRate = 16000; // Mic input is 16kHz
+              const durationMs = (float32Array.length / sampleRate * 1000);
 
-              // Convert Int16Array buffer to base64
+              // Log non-silent chunks with full details
+              if (!isSilent) {
+                console.log('[PRE-OPENAI AUDIO]', {
+                  chunkIndex: chunkCounterRef.current,
+                  timestamp: new Date().toISOString(),
+                  sampleRate,
+                  sampleCount: float32Array.length,
+                  durationMs: durationMs.toFixed(1),
+                  rmsEnergy: rms.toFixed(6),
+                  peakSample: peak.toFixed(6),
+                  isSilent: false,
+                  waveformSnapshot: Array.from(float32Array.slice(0, 32)).map(s => s.toFixed(4))
+                });
+
+                // Accumulate audio for utterance saving
+                if (isInUtteranceRef.current) {
+                  utteranceBufferRef.current.push(...Array.from(float32Array));
+                }
+              } else {
+                // Log silence at most once every 3 seconds
+                const now = Date.now();
+                if (now - lastSilenceLogRef.current >= 3000) {
+                  console.log('[PRE-OPENAI AUDIO] silence', {
+                    rmsEnergy: rms.toFixed(6),
+                    timestamp: new Date().toISOString()
+                  });
+                  lastSilenceLogRef.current = now;
+                }
+              }
+
+              chunkCounterRef.current++;
+
+              // Convert Int16Array buffer to base64 for OpenAI
               const uint8Array = new Uint8Array(int16Array.buffer);
               let binaryString = '';
               for (let i = 0; i < uint8Array.length; i++) {
@@ -796,7 +848,7 @@ export function useRealtimeVoice() {
               }));
 
             } else if (type === 'AUDIO_DATA' && dcRef.current?.readyState !== 'open') {
-              if (audioChunkCount === 0) {
+              if (chunkCounterRef.current === 0) {
                 console.error('❌ [MIC AUDIO] DataChannel not open! Cannot send audio to OpenAI. State:', dcRef.current?.readyState);
               }
             }
@@ -1123,6 +1175,7 @@ export function useRealtimeVoice() {
   const toggleMute = useCallback(() => {
     if (isMuted) {
       // Unmute
+      console.log('[PRE-OPENAI AUDIO] UNMUTED — stream resumed');
       console.log('[MIC] UNMUTED — mic resumed to OpenAI');
       setIsMuted(false);
       
@@ -1141,6 +1194,7 @@ export function useRealtimeVoice() {
       startAudioMonitoring();
     } else {
       // Mute
+      console.log('[PRE-OPENAI AUDIO] MUTED — stream paused');
       console.log('[MIC] MUTED — mic paused, nothing entering OpenAI');
       setIsMuted(true);
       
@@ -1273,5 +1327,15 @@ export function useRealtimeVoice() {
     setDbThreshold,
     getMediaStreams,
     checkMicrophonePermission,
+    saveAudioEnabled,
+    setSaveAudioEnabled: (enabled: boolean) => {
+      setSaveAudioEnabled(enabled);
+      if (enabled) {
+        savedCountRef.current = 0; // Reset counter when toggled on
+        console.log('[PRE-OPENAI AUDIO] Audio saving ENABLED');
+      } else {
+        console.log('[PRE-OPENAI AUDIO] Audio saving DISABLED');
+      }
+    },
   };
 }
