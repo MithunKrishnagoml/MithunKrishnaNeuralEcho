@@ -178,21 +178,29 @@ app.get('/api/openai-token', async (req, res) => {
       return res.status(500).json({ error: 'OpenAI API key not configured on server' });
     }
 
+    console.log(`✅ [OpenAI Token] API Key found, length: ${apiKey.length}`);
+
+    const requestBody = {
+      model: 'gpt-4o-realtime-preview-2024-12-17',
+      voice: 'shimmer'
+    };
+    
+    console.log(`📤 [OpenAI Token] Calling OpenAI API with:`, JSON.stringify(requestBody));
+
     const response = await fetch('https://api.openai.com/v1/realtime/sessions', {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        model: 'gpt-4o-realtime-preview-2024-12-17',
-        voice: 'shimmer'
-      })
+      body: JSON.stringify(requestBody)
     });
+
+    console.log(`📥 [OpenAI Token] OpenAI response status: ${response.status}`);
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error(`❌ [OpenAI Token] OpenAI API error (${response.status}):`, errorText);
+      console.error(`❌ [OpenAI Token] OpenAI API error (${response.status}):`, errorText.substring(0, 500));
       return res.status(response.status).json({ 
         error: `OpenAI API error: ${response.status}`,
         details: errorText.substring(0, 200)
@@ -203,7 +211,8 @@ app.get('/api/openai-token', async (req, res) => {
     console.log('✅ [OpenAI Token] Successfully created session');
     res.json({ client_secret: { value: data.client_secret.value } });
   } catch (error) {
-    console.error('❌ [OpenAI Token] Error:', error);
+    console.error('❌ [OpenAI Token] Error:', error.message);
+    console.error('Stack:', error.stack);
     res.status(500).json({ error: 'Failed to get OpenAI token', message: error.message });
   }
 });
