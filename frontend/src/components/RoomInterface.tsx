@@ -5,7 +5,7 @@ import { Badge } from '@/components/ui/badge';
 import { Mic, MicOff, LogOut } from 'lucide-react';
 import { useChatroomWS } from '@/hooks/useChatroomWS';
 import { useOpenAIRealtime } from '@/hooks/useOpenAIRealtime';
-import { useParams, useSearchParams } from 'react-router-dom';
+import { useParams, useSearchParams, useNavigate } from 'react-router-dom';
 
 interface TranscriptMessage {
   text: string;
@@ -77,7 +77,15 @@ const LiveTranscriptEntry = ({ entry }: { entry: TranscriptEntry }) => (
 export function RoomInterface() {
   const { roomId } = useParams<{ roomId: string }>();
   const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
   const [userId] = useState(() => `user_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`);
+  
+  // Check if user needs to enter name/language
+  const hasUserInfo = searchParams.has('name') && searchParams.has('language');
+  const [showJoinForm, setShowJoinForm] = useState(!hasUserInfo);
+  const [formName, setFormName] = useState('');
+  const [formLanguage, setFormLanguage] = useState('en');
+  
   const userName = searchParams.get('name') || 'User';
   const userLanguage = searchParams.get('language') || 'en';
   const [incomingTranscriptAccumulator, setIncomingTranscriptAccumulator] = useState('');
@@ -236,6 +244,16 @@ export function RoomInterface() {
     window.location.href = '/chatroom';
   }, [stopMic, leaveRoom]);
 
+  const handleJoinFormSubmit = () => {
+    if (!formName.trim()) {
+      alert('Please enter your name');
+      return;
+    }
+    // Navigate with name and language in query params
+    navigate(`/room/${roomId}?name=${encodeURIComponent(formName)}&language=${formLanguage}`);
+    setShowJoinForm(false);
+  };
+
   // Start OpenAI connection when room is ready
   useEffect(() => {
     if (wsStatus === 'ready' && openaiStatus === 'disconnected') {
@@ -257,6 +275,50 @@ export function RoomInterface() {
       </div>
 
       <div className="max-w-6xl mx-auto relative z-10">
+        {/* Join Form Dialog */}
+        {showJoinForm && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+            <Card className="bg-card border-border w-96">
+              <CardContent className="p-6">
+                <h2 className="text-2xl font-bold mb-4">Join Bilingual Chatroom</h2>
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium mb-2">Your Name</label>
+                    <input
+                      type="text"
+                      value={formName}
+                      onChange={(e) => setFormName(e.target.value)}
+                      placeholder="Enter your name"
+                      className="w-full px-3 py-2 border border-border rounded bg-background text-foreground placeholder:text-muted-foreground"
+                      onKeyPress={(e) => e.key === 'Enter' && handleJoinFormSubmit()}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-2">Language</label>
+                    <select
+                      value={formLanguage}
+                      onChange={(e) => setFormLanguage(e.target.value)}
+                      className="w-full px-3 py-2 border border-border rounded bg-background text-foreground"
+                    >
+                      <option value="en">English</option>
+                      <option value="fr">Français</option>
+                      <option value="es">Español</option>
+                      <option value="de">Deutsch</option>
+                      <option value="it">Italiano</option>
+                      <option value="pt">Português</option>
+                      <option value="ja">日本語</option>
+                      <option value="zh">中文</option>
+                    </select>
+                  </div>
+                  <Button onClick={handleJoinFormSubmit} className="w-full bg-blue-600 hover:bg-blue-700">
+                    Join Room
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        )}
+
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
           <div className="flex items-center gap-4">

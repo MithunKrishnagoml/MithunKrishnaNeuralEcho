@@ -171,14 +171,17 @@ app.post('/api/room/:roomId/cancel', (req, res) => {
 // Get OpenAI ephemeral token
 app.get('/api/openai-token', async (req, res) => {
   try {
-    if (!process.env.OPENAI_API_KEY) {
-      return res.status(500).json({ error: 'OpenAI API key not configured' });
+    const apiKey = process.env.OPENAI_API_KEY;
+    
+    if (!apiKey) {
+      console.error('❌ [OpenAI Token] OPENAI_API_KEY not configured');
+      return res.status(500).json({ error: 'OpenAI API key not configured on server' });
     }
 
     const response = await fetch('https://api.openai.com/v1/realtime/sessions', {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+        'Authorization': `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
@@ -188,14 +191,20 @@ app.get('/api/openai-token', async (req, res) => {
     });
 
     if (!response.ok) {
-      throw new Error(`OpenAI API error: ${response.status}`);
+      const errorText = await response.text();
+      console.error(`❌ [OpenAI Token] OpenAI API error (${response.status}):`, errorText);
+      return res.status(response.status).json({ 
+        error: `OpenAI API error: ${response.status}`,
+        details: errorText.substring(0, 200)
+      });
     }
 
     const data = await response.json();
+    console.log('✅ [OpenAI Token] Successfully created session');
     res.json({ client_secret: { value: data.client_secret.value } });
   } catch (error) {
     console.error('❌ [OpenAI Token] Error:', error);
-    res.status(500).json({ error: 'Failed to get OpenAI token' });
+    res.status(500).json({ error: 'Failed to get OpenAI token', message: error.message });
   }
 });
 

@@ -214,9 +214,27 @@ export function useOpenAIRealtime({
 
       // Step A: Get ephemeral token
       const tokenResponse = await fetch('/api/openai-token');
-      if (!tokenResponse.ok) throw new Error('Failed to get OpenAI token');
-      const tokenData = await tokenResponse.json();
+      if (!tokenResponse.ok) {
+        const errorText = await tokenResponse.text();
+        console.error('❌ [OpenAI] Token response:', errorText);
+        throw new Error(`Failed to get OpenAI token (${tokenResponse.status}): Check backend API key configuration`);
+      }
+      
+      let tokenData;
+      try {
+        const responseText = await tokenResponse.text();
+        tokenData = JSON.parse(responseText);
+      } catch (parseError) {
+        console.error('❌ [OpenAI] JSON parse error:', parseError);
+        throw new Error('Invalid token response format from backend');
+      }
+      
+      if (!tokenData.client_secret?.value) {
+        throw new Error('Invalid token data structure');
+      }
+      
       const token = tokenData.client_secret.value;
+      console.log('✅ [OpenAI] Got ephemeral token');
 
       // Step B: Create RTCPeerConnection
       const pc = new RTCPeerConnection();

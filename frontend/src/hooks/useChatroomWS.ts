@@ -53,6 +53,8 @@ export function useChatroomWS({
   const deltaBufferRef = useRef<any>(null);
   const rafRef = useRef<number | null>(null);
   const destroyedRef = useRef<boolean>(false);
+  const reconnectCountRef = useRef<number>(0);
+  const maxReconnectAttemptsRef = useRef<number>(10);
   
   // Use refs to avoid re-creating connect callback on every prop change
   const userNameRef = useRef(userName);
@@ -158,6 +160,7 @@ export function useChatroomWS({
 
       ws.onopen = () => {
         console.log('🔌 [WS] Connected to backend');
+        reconnectCountRef.current = 0; // ← Reset reconnect count on success
         setStatus('connecting');
 
         // Send JOIN_ROOM immediately after connect
@@ -294,13 +297,18 @@ export function useChatroomWS({
         setStatus('disconnected');
         wsRef.current = null;
 
-        // Auto-reconnect after 3 seconds, but guard against unmounted components
-        if (!destroyedRef.current) {
+        // Auto-reconnect with exponential backoff, but guard against unmounted components
+        if (!destroyedRef.current && reconnectCountRef.current < maxReconnectAttemptsRef.current) {
+          reconnectCountRef.current += 1;
+          // Exponential backoff: 3s, 6s, 12s, 24s, etc (max 30s)
+          const delayMs = Math.min(3000 * Math.pow(2, reconnectCountRef.current - 1), 30000);
+          console.log(`🔌 [WS] Reconnect attempt ${reconnectCountRef.current}/${maxReconnectAttemptsRef.current} in ${delayMs}ms`);
+          
           reconnectTimeoutRef.current = setTimeout(() => {
             if (!destroyedRef.current) {
               connect();
             }
-          }, 3000);
+          }, delayMs);
         }
       };
 
