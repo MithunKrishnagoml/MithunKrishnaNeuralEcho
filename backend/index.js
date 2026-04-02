@@ -91,7 +91,8 @@ app.post('/api/room/create', (req, res) => {
 
   // Use FRONTEND_URL from env, default to Vercel deployment (NOT the backend)
   const frontendUrl = process.env.FRONTEND_URL || 'https://neuralecho1.vercel.app';
-  const joinUrl = `${frontendUrl}/chatroom/join/${roomId}`;
+  // Generate share link that points to /room/:roomId route (same as creator uses)
+  const joinUrl = `${frontendUrl}/room/${roomId}`;
 
   console.log(`🏠 [ROOM] Created room ${roomId} for ${name} (${language})`);
   console.log(`🔗 [ROOM] Join URL: ${joinUrl}`);
