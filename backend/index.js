@@ -3,7 +3,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { WebSocketServer } from 'ws';
+import { WebSocketServer, WebSocket } from 'ws';
 import { createServer } from 'http';
 import { nanoid } from 'nanoid';
 
@@ -262,17 +262,19 @@ wss.on('connection', (ws, req) => {
       console.log('📨 [WS] Received:', data.type);
 
       switch (data.type) {
+        case 'join_session':
         case 'JOIN_ROOM': {
-          const { roomId, userId, name, language } = data;
-          const session = roomSessions.get(roomId);
+          const { roomId, sessionId, userId, name, language } = data;
+          const actualRoomId = roomId || sessionId;
+          const session = roomSessions.get(actualRoomId);
 
-          console.log(`🔗 [JOIN_ROOM] User ${name} (${userId}) attempting to join room ${roomId}`);
+          console.log(`🔗 [JOIN_ROOM] User ${name} (${userId}) attempting to join room ${actualRoomId}`);
           console.log(`📊 [JOIN_ROOM] Total rooms available: ${roomSessions.size}`);
           console.log(`📊 [JOIN_ROOM] Room IDs: ${Array.from(roomSessions.keys()).join(', ') || 'none'}`);
 
           if (!session) {
-            console.error(`❌ [JOIN_ROOM] Room ${roomId} not found! Available rooms:`, Array.from(roomSessions.keys()));
-            ws.send(JSON.stringify({ type: 'ERROR', message: 'Room not found' }));
+            console.error(`❌ [JOIN_ROOM] Room ${actualRoomId} not found! Available rooms:`, Array.from(roomSessions.keys()));
+            safeSend(ws, { type: 'ERROR', message: 'Room not found' });
             return;
           }
 
@@ -285,7 +287,7 @@ wss.on('connection', (ws, req) => {
           }
 
           if (liveParticipants >= 2) {
-            ws.send(JSON.stringify({ type: 'ERROR', message: 'Room is full' }));
+            safeSend(ws, { type: 'ERROR', message: 'Room is full' });
             return;
           }
 
@@ -299,41 +301,71 @@ wss.on('connection', (ws, req) => {
           });
 
           connectionId = userId;
-          currentRoomId = roomId;
+          currentRoomId = actualRoomId;
           currentUserId = userId;
 
-          console.log(`👤 [ROOM] ${userId} joined room ${roomId}, participants: ${liveParticipants + 1}`);
+          console.log(`👤 [ROOM] ${userId} joined room ${actualRoomId}, participants: ${liveParticipants + 1}`);
 
           if (liveParticipants + 1 === 1) {
-            // First participant
-            ws.send(JSON.stringify({
-              type: 'WAITING',
+            // First participant - send WAITING_FOR_PARTICIPANT
+            safeSend(ws, {
+              type: 'WAITING_FOR_PARTICIPANT',
               participantCount: 1
-            }));
+            });
+            console.log(`⏳ [ROOM] First participant waiting in room ${actualRoomId}`);
           } else {
             // Second participant - room is ready
-            const otherParticipant = Array.from(session.participants.values())
-              .find(p => p.userId !== userId);
+            const participants = Array.from(session.participants.values());
+            const firstParticipant = participants.find(p => p.userId !== userId);
+            const secondParticipant = participants.find(p => p.userId === userId);
 
-            // Notify both participants
-            for (const participant of session.participants.values()) {
-              participant.ws.send(JSON.stringify({
-                type: 'ROOM_READY',
-                participantCount: 2,
-                otherParticipant: {
-                  id: otherParticipant.userId,
-                  name: otherParticipant.name,
-                  language: otherParticipant.language
-                }
-              }));
+            if (!firstParticipant || !secondParticipant) {
+              console.error(`❌ [ROOM] Could not find both participants`);
+              return;
             }
+
+            // Notify first participant about second participant joining
+            safeSend(firstParticipant.ws, {
+              type: 'USER_JOINED_ROOM',
+              sessionId: actualRoomId,
+              participantCount: 2,
+              userId: secondParticipant.userId,
+              newParticipantName: secondParticipant.name,
+              newParticipantLanguage: secondParticipant.language
+            });
+
+            // Send translation_ready to both participants
+            safeSend(firstParticipant.ws, {
+              type: 'translation_ready',
+              sessionId: actualRoomId,
+              participantCount: 2,
+              otherParticipant: {
+                id: secondParticipant.userId,
+                name: secondParticipant.name,
+                language: secondParticipant.language
+              }
+            });
+
+            safeSend(secondParticipant.ws, {
+              type: 'translation_ready',
+              sessionId: actualRoomId,
+              participantCount: 2,
+              otherParticipant: {
+                id: firstParticipant.userId,
+                name: firstParticipant.name,
+                language: firstParticipant.language
+              }
+            });
+
+            console.log(`✅ [ROOM] Both participants connected in room ${actualRoomId}, translation ready`);
           }
           break;
         }
 
         case 'TRANSCRIPT': {
-          const { roomId, userId, text, direction } = data;
-          const session = roomSessions.get(roomId);
+          const { roomId, sessionId, userId, text, direction } = data;
+          const actualRoomId = roomId || sessionId;
+          const session = roomSessions.get(actualRoomId);
 
           if (!session) return;
 
@@ -343,20 +375,24 @@ wss.on('connection', (ws, req) => {
 
           if (!otherParticipant) return;
 
+          const timestamp = Date.now();
+
           if (direction === 'MY') {
             // Send to sender as their own transcript
-            ws.send(JSON.stringify({
+            safeSend(ws, {
               type: 'MY_TRANSCRIPT',
               text,
-              speakerId: userId
-            }));
+              speakerId: userId,
+              timestamp
+            });
           } else if (direction === 'INCOMING') {
             // Send to other participant as incoming transcript
-            otherParticipant.ws.send(JSON.stringify({
+            safeSend(otherParticipant.ws, {
               type: 'INCOMING_TRANSCRIPT',
               text,
-              speakerId: userId
-            }));
+              speakerId: userId,
+              timestamp
+            });
           }
           break;
         }
@@ -410,8 +446,9 @@ wss.on('connection', (ws, req) => {
         }
 
         case 'MUTE_STATE': {
-          const { roomId, userId, isMuted } = data;
-          const session = roomSessions.get(roomId);
+          const { roomId, sessionId, userId, isMuted } = data;
+          const actualRoomId = roomId || sessionId;
+          const session = roomSessions.get(actualRoomId);
 
           if (!session) return;
 
@@ -420,18 +457,21 @@ wss.on('connection', (ws, req) => {
             .find(p => p.userId !== userId);
 
           if (otherParticipant) {
-            otherParticipant.ws.send(JSON.stringify({
+            safeSend(otherParticipant.ws, {
               type: 'PEER_MUTE_STATE',
               peerId: userId,
               isMuted
-            }));
+            });
           }
           break;
         }
 
+        case 'MIC_AUDIO_CHUNK':
         case 'AUDIO_CHUNK': {
-          const { roomId, userId, audio, timestamp } = data;
-          const session = roomSessions.get(roomId);
+          const { roomId, sessionId, userId, audioData, audio, timestamp } = data;
+          const actualRoomId = roomId || sessionId;
+          const actualAudio = audioData || audio;
+          const session = roomSessions.get(actualRoomId);
 
           if (!session) return;
 
@@ -441,19 +481,22 @@ wss.on('connection', (ws, req) => {
 
           if (otherParticipant) {
             console.log(`🎵 [AUDIO] Relaying audio chunk from ${userId} to peer (timestamp: ${timestamp})`);
-            otherParticipant.ws.send(JSON.stringify({
-              type: 'PEER_AUDIO_CHUNK',
-              peerId: userId,
-              audio,
-              timestamp
-            }));
+            // Send as TRANSLATED_AUDIO_CHUNK to match frontend expectations
+            safeSend(otherParticipant.ws, {
+              type: 'TRANSLATED_AUDIO_CHUNK',
+              speakerId: userId,
+              audioData: actualAudio,
+              chunkId: `chunk_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+              timestamp: timestamp || Date.now()
+            });
           }
           break;
         }
 
         case 'LEAVE_ROOM': {
-          const { roomId, userId } = data;
-          const session = roomSessions.get(roomId);
+          const { roomId, sessionId, userId } = data;
+          const actualRoomId = roomId || sessionId;
+          const session = roomSessions.get(actualRoomId);
 
           if (session) {
             session.participants.delete(userId);
@@ -461,16 +504,17 @@ wss.on('connection', (ws, req) => {
             // Notify remaining participant
             const remainingParticipant = Array.from(session.participants.values())[0];
             if (remainingParticipant) {
-              remainingParticipant.ws.send(JSON.stringify({
-                type: 'PEER_LEFT'
-              }));
+              safeSend(remainingParticipant.ws, {
+                type: 'PEER_LEFT',
+                userId
+              });
             }
 
             // Clean up empty rooms after a delay
             setTimeout(() => {
               if (session.participants.size === 0) {
-                roomSessions.delete(roomId);
-                console.log(`🗑️ [ROOM] Cleaned up empty room ${roomId}`);
+                roomSessions.delete(actualRoomId);
+                console.log(`🗑️ [ROOM] Cleaned up empty room ${actualRoomId}`);
               }
             }, 30000);
           }
@@ -493,9 +537,10 @@ wss.on('connection', (ws, req) => {
         // Notify remaining participant
         const remainingParticipant = Array.from(session.participants.values())[0];
         if (remainingParticipant) {
-          remainingParticipant.ws.send(JSON.stringify({
-            type: 'PEER_LEFT'
-          }));
+          safeSend(remainingParticipant.ws, {
+            type: 'PEER_LEFT',
+            userId: currentUserId
+          });
         }
       }
     }

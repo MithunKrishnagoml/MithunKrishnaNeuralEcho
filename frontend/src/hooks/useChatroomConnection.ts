@@ -145,6 +145,12 @@ export function useChatroomConnection({ roomId, participant, onEvent }: UseChatr
         }
         
         switch (data.type) {
+          case 'WAITING_FOR_PARTICIPANT':
+            console.log('⏳ [WAITING_FOR_PARTICIPANT] Waiting for another participant to join');
+            console.log('⏳ [WAITING_FOR_PARTICIPANT] Participant count:', data.participantCount);
+            // UI will show "Waiting for participant..." message
+            break;
+            
           case 'USER_JOINED_ROOM':
             console.log('═══════════════════════════════════════════════════════');
             console.log('📥 [USER_JOINED_ROOM] Event received!');
