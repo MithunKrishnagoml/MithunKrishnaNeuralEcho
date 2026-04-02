@@ -63,18 +63,46 @@ function safeSend(ws, message) {
 // Store active room sessions
 const roomSessions = new Map();
 
-// Room expiry cleanup (10 minutes)
+// Room expiry cleanup (2 hours - extended for Render free tier stability)
+// Render free tier restarts occur, so longer cleanup prevents premature deletion
 setInterval(() => {
   const now = Date.now();
-  const expiryTime = 10 * 60 * 1000; // 10 minutes
+  const expiryTime = 2 * 60 * 60 * 1000; // 2 hours
 
   for (const [roomId, session] of roomSessions.entries()) {
-    if (now - session.createdAt > expiryTime) {
+    // Only expire if BOTH participants have left AND it's been 2+ hours
+    let activeParticipants = 0;
+    for (const participant of session.participants.values()) {
+      if (participant.ws && participant.ws.readyState === WebSocket.OPEN) {
+        activeParticipants++;
+      }
+    }
+    
+    if (activeParticipants === 0 && now - session.createdAt > expiryTime) {
       roomSessions.delete(roomId);
-      console.log(`🏠 [ROOM] Expired room ${roomId} after 10 minutes`);
+      console.log(`🏠 [ROOM] Expired empty room ${roomId} after 2 hours`);
     }
   }
 }, 60 * 1000); // Check every minute
+
+// Log current room count every 5 minutes for monitoring
+setInterval(() => {
+  let totalRooms = 0;
+  let activeRooms = 0;
+  
+  for (const [roomId, session] of roomSessions.entries()) {
+    totalRooms++;
+    let activeParticipants = 0;
+    for (const participant of session.participants.values()) {
+      if (participant.ws && participant.ws.readyState === WebSocket.OPEN) {
+        activeParticipants++;
+      }
+    }
+    if (activeParticipants > 0) activeRooms++;
+  }
+  
+  console.log(`📊 [ROOMS] Total: ${totalRooms}, Active: ${activeRooms}`);
+}, 5 * 60 * 1000);
 
 // API Routes
 
@@ -88,6 +116,10 @@ app.post('/api/room/create', (req, res) => {
   const roomId = nanoid(10);
   const session = new RoomSession(roomId);
   roomSessions.set(roomId, session);
+
+  console.log(`✅ [ROOM CREATE] Room ${roomId} created successfully`);
+  console.log(`📊 [ROOM CREATE] Total rooms now: ${roomSessions.size}`);
+  console.log(`📊 [ROOM CREATE] All room IDs: ${Array.from(roomSessions.keys()).join(', ')}`);
 
   // Use FRONTEND_URL from env, default to Vercel deployment (NOT the backend)
   const frontendUrl = process.env.FRONTEND_URL || 'https://neuralecho1.vercel.app';
@@ -234,7 +266,12 @@ wss.on('connection', (ws, req) => {
           const { roomId, userId, name, language } = data;
           const session = roomSessions.get(roomId);
 
+          console.log(`🔗 [JOIN_ROOM] User ${name} (${userId}) attempting to join room ${roomId}`);
+          console.log(`📊 [JOIN_ROOM] Total rooms available: ${roomSessions.size}`);
+          console.log(`📊 [JOIN_ROOM] Room IDs: ${Array.from(roomSessions.keys()).join(', ') || 'none'}`);
+
           if (!session) {
+            console.error(`❌ [JOIN_ROOM] Room ${roomId} not found! Available rooms:`, Array.from(roomSessions.keys()));
             ws.send(JSON.stringify({ type: 'ERROR', message: 'Room not found' }));
             return;
           }

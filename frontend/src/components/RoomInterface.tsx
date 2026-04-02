@@ -95,6 +95,7 @@ export function RoomInterface() {
 
   const {
     status: wsStatus,
+    errorMessage,
     otherParticipant,
     myTranscripts,
     incomingTranscripts,
@@ -337,7 +338,35 @@ export function RoomInterface() {
         </div>
 
         {/* Connection Error Alert */}
-        {wsStatus === 'disconnected' && (
+        {errorMessage === 'Room not found' && (
+          <div className="mb-4 p-4 bg-red-950 border border-red-700 rounded-lg">
+            <p className="text-sm font-semibold text-red-200 mb-2">
+              ⚠️ Critical Error: Room Not Found
+            </p>
+            <p className="text-sm text-red-300 mb-2">
+              The room does not exist on the server. This usually happens when:
+            </p>
+            <ul className="text-sm text-red-300 space-y-1 ml-4">
+              <li>• Server restarted (daily on free tier)</li>
+              <li>• Room expired after 2 hours of inactivity</li>
+              <li>• Link is invalid or from an old session</li>
+            </ul>
+            <p className="text-sm text-red-300 mt-2">
+              <strong>Solution:</strong> Ask the creator to share a new fresh invite link.
+            </p>
+            <Button 
+              onClick={handleLeaveRoom} 
+              variant="destructive" 
+              size="sm"
+              className="mt-3"
+            >
+              Go Back & Get New Link
+            </Button>
+          </div>
+        )}
+
+        {/* Connection Error Alert */}
+        {wsStatus === 'disconnected' && errorMessage !== 'Room not found' && (
           <div className="mb-4 p-4 bg-red-950 border border-red-700 rounded-lg">
             <p className="text-sm text-red-200">
               ⚠️ WebSocket connection lost. Attempting to reconnect...

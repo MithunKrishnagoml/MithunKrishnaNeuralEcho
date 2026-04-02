@@ -47,6 +47,7 @@ export function useChatroomWS({
   const [otherParticipant, setOtherParticipant] = useState<OtherParticipant | null>(null);
   const [myTranscripts, setMyTranscripts] = useState<TranscriptMessage[]>([]);
   const [incomingTranscripts, setIncomingTranscripts] = useState<TranscriptMessage[]>([]);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -284,7 +285,21 @@ export function useChatroomWS({
 
             case 'ERROR':
               console.error('❌ [WS] Error:', data.message);
-              setStatus('disconnected');
+              setErrorMessage(data.message);
+              
+              // Special handling for room not found
+              if (data.message === 'Room not found') {
+                console.error('❌ [WS] CRITICAL: Room does not exist on server. Possible causes:');
+                console.error('   1. Room never was created successfully');
+                console.error('   2. Server restarted and lost in-memory room data');
+                console.error('   3. Room expired after 2 hours of inactivity');
+                console.error('   4. Multiple server instances and room created on different instance');
+                setStatus('disconnected');
+                // Don't auto-reconnect if room doesn't exist
+                ws.close();
+              } else {
+                setStatus('disconnected');
+              }
               break;
           }
         } catch (error) {
@@ -350,6 +365,7 @@ export function useChatroomWS({
 
   return {
     status,
+    errorMessage,
     otherParticipant,
     myTranscripts,
     incomingTranscripts,
