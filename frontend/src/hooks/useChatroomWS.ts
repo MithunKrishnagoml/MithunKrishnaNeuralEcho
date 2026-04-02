@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { WS_URL } from '@/lib/config';
 
 interface TranscriptMessage {
   id: string;
@@ -53,14 +54,9 @@ export function useChatroomWS({
   const connect = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
 
-    // Determine WebSocket URL based on environment
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const host = window.location.hostname;
-    const port = window.location.port ? `:${window.location.port}` : '';
-    const wsUrl = `${protocol}//${host}${port}`;
-    
-    console.log('🔌 [WS] Connecting to:', wsUrl);
-    const ws = new WebSocket(wsUrl);
+    // Use backend WebSocket URL from environment
+    console.log('🔌 [WS] Connecting to:', WS_URL);
+    const ws = new WebSocket(WS_URL);
     wsRef.current = ws;
 
     ws.onopen = () => {
