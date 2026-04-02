@@ -65,168 +65,8 @@ export function useChatroomWS({
     userLanguageRef.current = userLanguage;
   }, [userLanguage]);
 
-  const connect = useCallback(() => {
-    // Guard: don't reconnect if component was unmounted
-    if (destroyedRef.current) {
-      console.log('🔌 [WS] Ignoring connect() after unmount');
-      return;
-    }
-
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      console.log('🔌 [WS] Already connected, skipping');
-      return;
-    }
-
-    // Use backend WebSocket URL from environment
-    console.log('🔌 [WS] Connecting to:', WS_URL);
-    const ws = new WebSocket(WS_URL);
-    wsRef.current = ws;
-
-    ws.onopen = () => {
-      console.log('🔌 [WS] Connected to backend');
-      setStatus('connecting');
-
-      // Send JOIN_ROOM immediately after connect
-      ws.send(JSON.stringify({
-        type: 'JOIN_ROOM',
-        roomId,
-        userId,
-        name: userNameRef.current,
-        language: userLanguageRef.current
-      }));
-    };
-
-    ws.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        console.log('📨 [WS] Received:', data.type);
-
-        switch (data.type) {
-          case 'WAITING':
-            setStatus('waiting');
-            break;
-
-          case 'ROOM_READY':
-            setStatus('ready');
-            setOtherParticipant(data.otherParticipant);
-            onRoomReady?.(data.otherParticipant);
-            break;
-
-          case 'MY_TRANSCRIPT':
-            const myTranscript: TranscriptMessage = {
-              id: `my-${Date.now()}`,
-              speakerId: userId,
-              speakerName: userNameRef.current,
-              originalText: data.text,
-              translatedText: data.text,
-              status: 'done',
-              timestamp: Date.now()
-            };
-            setMyTranscripts(prev => [...prev, myTranscript]);
-            onMyTranscript?.(data.text);
-            break;
-
-          case 'INCOMING_TRANSCRIPT':
-            const incomingTranscript: TranscriptMessage = {
-              id: `incoming-${Date.now()}`,
-              speakerId: data.speakerId,
-              speakerName: data.speakerName,
-              originalText: data.text,
-              translatedText: data.text,
-              status: 'done',
-              timestamp: Date.now()
-            };
-            setIncomingTranscripts(prev => [...prev, incomingTranscript]);
-            onIncomingTranscript?.(data.text, data.speakerId);
-            break;
-
-          case 'PEER_LEFT':
-            setStatus('disconnected');
-            setOtherParticipant(null);
-            onPeerLeft?.();
-            break;
-
-          case 'PEER_TRANSCRIPT_DELTA':
-            // Accumulate deltas and flush with rAF debouncing
-            deltaBufferRef.current = {
-              sentenceId: data.sentenceId,
-              speakerId: data.speakerId,
-              speakerName: data.speakerName,
-              originalText: data.originalText,
-              translatedText: data.translatedText,
-              timestamp: data.timestamp
-            };
-
-            if (!rafRef.current) {
-              rafRef.current = requestAnimationFrame(() => {
-                const d = deltaBufferRef.current;
-                setIncomingTranscripts(prev => {
-                  const exists = prev.find(t => t.id === d.sentenceId);
-                  if (!exists) {
-                    return [...prev, {
-                      id: d.sentenceId,
-                      speakerId: d.speakerId,
-                      speakerName: d.speakerName,
-                      originalText: d.originalText,
-                      translatedText: d.translatedText,
-                      status: 'streaming',
-                      timestamp: d.timestamp
-                    }];
-                  }
-                  return prev.map(t =>
-                    t.id === d.sentenceId
-                      ? { ...t,
-                          originalText: d.originalText,
-                          translatedText: d.translatedText }
-                      : t
-                  );
-                });
-                rafRef.current = null;
-              });
-            }
-            break;
-
-          case 'PEER_TRANSCRIPT_SENTENCE_DONE':
-            setIncomingTranscripts(prev =>
-              prev.map(t =>
-                t.id === data.sentenceId
-                  ? { ...t, status: 'done' }
-                  : t
-              )
-            );
-            break;
-
-          case 'ERROR':
-            console.error('❌ [WS] Error:', data.message);
-            setStatus('disconnected');
-            break;
-        }
-      } catch (error) {
-        console.error('❌ [WS] Error parsing message:', error);
-      }
-    };
-
-    ws.onclose = () => {
-      console.log('🔌 [WS] Disconnected');
-      setStatus('disconnected');
-      wsRef.current = null;
-
-      // Auto-reconnect after 3 seconds, but guard against unmounted components
-      if (!destroyedRef.current) {
-        reconnectTimeoutRef.current = setTimeout(() => {
-          if (!destroyedRef.current) {
-            connect();
-          }
-        }, 3000);
-      }
-    };
-
-    ws.onerror = (event: Event) => {
-      const wsEvent = event as Event;
-      console.error('❌ [WS] WebSocket error:', wsEvent);
-      setStatus('disconnected');
-    };
-  }, [roomId, userId, onRoomReady, onMyTranscript, onIncomingTranscript, onPeerLeft, onPeerMuteState]);
+  // Connection handler - moved into useEffect to avoid dependency array issues
+  // This creates a stable function that doesn't cause the effect to re-run
 
   const sendTranscript = useCallback((data: string | object, direction: 'MY' | 'INCOMING' | 'DELTA' | 'SENTENCE_DONE') => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
@@ -278,14 +118,180 @@ export function useChatroomWS({
     }
   }, [roomId, userId]);
 
+  // Connection handler - moved into useEffect to avoid dependency array issues
+  // This creates a stable function that doesn't cause the effect to re-run
+
   useEffect(() => {
     // Reset destroyed flag when component mounts
     destroyedRef.current = false;
 
+    const connect = () => {
+      // Guard: don't reconnect if component was unmounted
+      if (destroyedRef.current) {
+        console.log('🔌 [WS] Ignoring connect() after unmount');
+        return;
+      }
+
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+        console.log('🔌 [WS] Already connected, skipping');
+        return;
+      }
+
+      // Use backend WebSocket URL from environment
+      console.log('🔌 [WS] Connecting to:', WS_URL);
+      const ws = new WebSocket(WS_URL);
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        console.log('🔌 [WS] Connected to backend');
+        setStatus('connecting');
+
+        // Send JOIN_ROOM immediately after connect
+        ws.send(JSON.stringify({
+          type: 'JOIN_ROOM',
+          roomId,
+          userId,
+          name: userNameRef.current,
+          language: userLanguageRef.current
+        }));
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          console.log('📨 [WS] Received:', data.type);
+
+          switch (data.type) {
+            case 'WAITING':
+              setStatus('waiting');
+              break;
+
+            case 'ROOM_READY':
+              setStatus('ready');
+              setOtherParticipant(data.otherParticipant);
+              onRoomReady?.(data.otherParticipant);
+              break;
+
+            case 'MY_TRANSCRIPT':
+              const myTranscript: TranscriptMessage = {
+                id: `my-${Date.now()}`,
+                speakerId: userId,
+                speakerName: userNameRef.current,
+                originalText: data.text,
+                translatedText: data.text,
+                status: 'done',
+                timestamp: Date.now()
+              };
+              setMyTranscripts(prev => [...prev, myTranscript]);
+              onMyTranscript?.(data.text);
+              break;
+
+            case 'INCOMING_TRANSCRIPT':
+              const incomingTranscript: TranscriptMessage = {
+                id: `incoming-${Date.now()}`,
+                speakerId: data.speakerId,
+                speakerName: data.speakerName,
+                originalText: data.text,
+                translatedText: data.text,
+                status: 'done',
+                timestamp: Date.now()
+              };
+              setIncomingTranscripts(prev => [...prev, incomingTranscript]);
+              onIncomingTranscript?.(data.text, data.speakerId);
+              break;
+
+            case 'PEER_LEFT':
+              setStatus('disconnected');
+              setOtherParticipant(null);
+              onPeerLeft?.();
+              break;
+
+            case 'PEER_TRANSCRIPT_DELTA':
+              // Accumulate deltas and flush with rAF debouncing
+              deltaBufferRef.current = {
+                sentenceId: data.sentenceId,
+                speakerId: data.speakerId,
+                speakerName: data.speakerName,
+                originalText: data.originalText,
+                translatedText: data.translatedText,
+                timestamp: data.timestamp
+              };
+
+              if (!rafRef.current) {
+                rafRef.current = requestAnimationFrame(() => {
+                  const d = deltaBufferRef.current;
+                  setIncomingTranscripts(prev => {
+                    const exists = prev.find(t => t.id === d.sentenceId);
+                    if (!exists) {
+                      return [...prev, {
+                        id: d.sentenceId,
+                        speakerId: d.speakerId,
+                        speakerName: d.speakerName,
+                        originalText: d.originalText,
+                        translatedText: d.translatedText,
+                        status: 'streaming',
+                        timestamp: d.timestamp
+                      }];
+                    }
+                    return prev.map(t =>
+                      t.id === d.sentenceId
+                        ? { ...t,
+                            originalText: d.originalText,
+                            translatedText: d.translatedText }
+                        : t
+                    );
+                  });
+                  rafRef.current = null;
+                });
+              }
+              break;
+
+            case 'PEER_TRANSCRIPT_SENTENCE_DONE':
+              setIncomingTranscripts(prev =>
+                prev.map(t =>
+                  t.id === data.sentenceId
+                    ? { ...t, status: 'done' }
+                    : t
+                )
+              );
+              break;
+
+            case 'ERROR':
+              console.error('❌ [WS] Error:', data.message);
+              setStatus('disconnected');
+              break;
+          }
+        } catch (error) {
+          console.error('❌ [WS] Error parsing message:', error);
+        }
+      };
+
+      ws.onclose = () => {
+        console.log('🔌 [WS] Disconnected');
+        setStatus('disconnected');
+        wsRef.current = null;
+
+        // Auto-reconnect after 3 seconds, but guard against unmounted components
+        if (!destroyedRef.current) {
+          reconnectTimeoutRef.current = setTimeout(() => {
+            if (!destroyedRef.current) {
+              connect();
+            }
+          }, 3000);
+        }
+      };
+
+      ws.onerror = (event: Event) => {
+        const wsEvent = event as Event;
+        console.error('❌ [WS] WebSocket error:', wsEvent);
+        setStatus('disconnected');
+      };
+    };
+
     // Initiate connection
     connect();
 
-    // Cleanup: runs on unmount or when dependencies change
+    // Cleanup: runs on unmount or when roomId/userId changes
     return () => {
       destroyedRef.current = true;  // ← Stop reconnect loop
 
@@ -309,7 +315,7 @@ export function useChatroomWS({
 
       console.log('🔌 [WS] Component unmounted, cleanup complete');
     };
-  }, [roomId, userId, connect]);
+  }, [roomId, userId]);
 
   return {
     status,
