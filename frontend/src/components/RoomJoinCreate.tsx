@@ -72,6 +72,19 @@ export function RoomJoinCreate({ onCreateRoom, onJoinRoom, isLoading = false, pr
     setCreatedRoom(null);
   };
 
+  const handleJoinRoom = async () => {
+    if (joinData.name.trim() && joinData.roomId.trim()) {
+      try {
+        await onJoinRoom(joinData);
+      } catch (error) {
+        console.error('Failed to join room:', error);
+        toast.error('Failed to join room. Please try again.');
+      }
+    } else {
+      toast.error('Please enter your name and room ID');
+    }
+  };
+
   const generateRoomId = () => {
     const randomId = Math.random().toString(36).substring(2, 8);
     return `neuralecho-${randomId}`;
