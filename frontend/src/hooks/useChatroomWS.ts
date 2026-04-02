@@ -47,6 +47,8 @@ export function useChatroomWS({
 
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const deltaBufferRef = useRef<any>(null);
+  const rafRef = useRef<number | null>(null);
 
   const connect = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
@@ -126,30 +128,43 @@ export function useChatroomWS({
             break;
 
           case 'PEER_TRANSCRIPT_DELTA':
-            // Upsert by sentenceId — creates on first delta, updates on subsequent
-            setIncomingTranscripts(prev => {
-              const exists = prev.find(t => t.id === data.sentenceId);
-              if (!exists) {
-                return [...prev, {
-                  id: data.sentenceId,
-                  speakerId: data.speakerId,
-                  speakerName: data.speakerName,
-                  originalText: data.originalText,
-                  translatedText: data.translatedText,
-                  status: 'streaming',
-                  timestamp: data.timestamp,
-                  wordCount: data.wordCount
-                }];
-              }
-              return prev.map(t =>
-                t.id === data.sentenceId
-                  ? { ...t,
-                      originalText: data.originalText,
-                      translatedText: data.translatedText,
-                      wordCount: data.wordCount }
-                  : t
-              );
-            });
+            // Accumulate deltas and flush with rAF debouncing
+            deltaBufferRef.current = {
+              sentenceId: data.sentenceId,
+              speakerId: data.speakerId,
+              speakerName: data.speakerName,
+              originalText: data.originalText,
+              translatedText: data.translatedText,
+              timestamp: data.timestamp
+            };
+
+            if (!rafRef.current) {
+              rafRef.current = requestAnimationFrame(() => {
+                const d = deltaBufferRef.current;
+                setIncomingTranscripts(prev => {
+                  const exists = prev.find(t => t.id === d.sentenceId);
+                  if (!exists) {
+                    return [...prev, {
+                      id: d.sentenceId,
+                      speakerId: d.speakerId,
+                      speakerName: d.speakerName,
+                      originalText: d.originalText,
+                      translatedText: d.translatedText,
+                      status: 'streaming',
+                      timestamp: d.timestamp
+                    }];
+                  }
+                  return prev.map(t =>
+                    t.id === d.sentenceId
+                      ? { ...t,
+                          originalText: d.originalText,
+                          translatedText: d.translatedText }
+                      : t
+                  );
+                });
+                rafRef.current = null;
+              });
+            }
             break;
 
           case 'PEER_TRANSCRIPT_SENTENCE_DONE':

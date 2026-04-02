@@ -39,6 +39,10 @@ class MicPreprocessProcessor extends AudioWorkletProcessor {
     this.rmsAttackCoef = Math.exp(-1 / (0.008 * this.sampleRate));
     this.rmsReleaseCoef = Math.exp(-1 / (0.06 * this.sampleRate));
 
+    // Energy tracking for hallucination filtering
+    this.committedFrameCount = 0;
+    this.committedEnergySum = 0;
+
     // Thresholds
     this.speechThreshold = 0.02;   // RMS above → speech active
     this.silenceThreshold = 0.008; // RMS below → silence
@@ -51,6 +55,9 @@ class MicPreprocessProcessor extends AudioWorkletProcessor {
     this.silenceHoldSamples = Math.floor(0.18 * this.sampleRate);
     this.silenceSampleCount = 0;
 
+    // Phrase boundary: longer silence for sentence end (800ms)
+    this.silenceHoldPhraseSamples = Math.floor(0.80 * this.sampleRate);
+
     // Minimum word length: ignore sub-50ms bursts (plosives, clicks)
     this.minWordSamples = Math.floor(0.05 * this.sampleRate);
     this.speechSampleCount = 0;
@@ -58,6 +65,14 @@ class MicPreprocessProcessor extends AudioWorkletProcessor {
     // Maximum word length before forced commit (prevents run-on audio)
     // At 24kHz, 3 seconds = 72000 samples
     this.maxWordSamples = Math.floor(3.0 * this.sampleRate);
+
+    // Maximum phrase length before forced commit (4 seconds)
+    this.maxPhraseSamples = Math.floor(4.0 * this.sampleRate);
+    this.phraseSampleCount = 0;
+
+    // Track committed state to prevent double-commits
+    this.wordCommittedThisSpeech = false;
+    this.phraseCommittedThisSpeech = false;
   }
 
   process(inputs, outputs) {
@@ -134,28 +149,55 @@ class MicPreprocessProcessor extends AudioWorkletProcessor {
     }
 
     let wordBoundary = false;
+    let phraseBoundary = false;
 
     switch (this.vadState) {
       case "silence":
         if (this.rmsSmoothed > this.speechThreshold) {
           this.vadState = "speech";
           this.speechSampleCount = 0;
+          this.phraseSampleCount = 0;
           this.silenceSampleCount = 0;
+          this.wordCommittedThisSpeech = false;
+          this.phraseCommittedThisSpeech = false;
         }
         break;
 
       case "speech":
         this.speechSampleCount += processed.length;
+        this.phraseSampleCount += processed.length;
+
+        // Accumulate energy for this committed segment
+        this.committedFrameCount += processed.length;
+        for (let i = 0; i < processed.length; i++) {
+          this.committedEnergySum += processed[i] ** 2;
+        }
 
         if (this.rmsSmoothed < this.silenceThreshold) {
-          // Energy dropped — potential end of word
+          // Energy dropped — potential end of word/phrase
           this.silenceSampleCount += processed.length;
-          if (this.silenceSampleCount >= this.silenceHoldSamples
-              && this.speechSampleCount >= this.minWordSamples) {
-            // Confirmed end of word — commit
+
+          const isWordEnd = this.silenceSampleCount >= this.silenceHoldSamples &&
+                           this.speechSampleCount >= this.minWordSamples &&
+                           !this.wordCommittedThisSpeech;
+
+          const isPhraseEnd = this.silenceSampleCount >= this.silenceHoldPhraseSamples &&
+                             !this.phraseCommittedThisSpeech;
+
+          if (isWordEnd) {
             wordBoundary = true;
+            this.wordCommittedThisSpeech = true;
+          }
+
+          if (isPhraseEnd) {
+            phraseBoundary = true;
+            this.phraseCommittedThisSpeech = true;
+          }
+
+          if (wordBoundary || phraseBoundary) {
             this.vadState = "silence";
             this.speechSampleCount = 0;
+            this.phraseSampleCount = 0;
             this.silenceSampleCount = 0;
           }
         } else {
@@ -163,20 +205,49 @@ class MicPreprocessProcessor extends AudioWorkletProcessor {
         }
 
         // Force commit if word is too long (continuous speech)
-        if (this.speechSampleCount >= this.maxWordSamples) {
+        if (this.speechSampleCount >= this.maxWordSamples && !this.wordCommittedThisSpeech) {
           wordBoundary = true;
+          this.wordCommittedThisSpeech = true;
+        }
+
+        // Force phrase commit if too long
+        if (this.phraseSampleCount >= this.maxPhraseSamples && !this.phraseCommittedThisSpeech) {
+          phraseBoundary = true;
+          this.phraseCommittedThisSpeech = true;
+          this.vadState = "silence";
           this.speechSampleCount = 0;
+          this.phraseSampleCount = 0;
           this.silenceSampleCount = 0;
-          // Stay in "speech" state — speaker hasn't stopped
         }
         break;
     }
 
-    this.port.postMessage({
-      pcm: processed.buffer,
-      rms: this.rmsSmoothed,
-      wordBoundary
-    }, [processed.buffer]);
+    // Send message with energy data if committing
+    if (wordBoundary || phraseBoundary) {
+      const avgEnergy = this.committedEnergySum / this.committedFrameCount;
+      const durationMs = (this.committedFrameCount / this.sampleRate) * 1000;
+
+      this.port.postMessage({
+        pcm: processed.buffer,
+        rms: this.rmsSmoothed,
+        wordBoundary,
+        phraseBoundary,
+        commitEnergy: avgEnergy,
+        commitDurationMs: durationMs
+      }, [processed.buffer]);
+
+      // Reset energy tracking after commit
+      this.committedFrameCount = 0;
+      this.committedEnergySum = 0;
+    } else {
+      // Normal message without boundary
+      this.port.postMessage({
+        pcm: processed.buffer,
+        rms: this.rmsSmoothed,
+        wordBoundary: false,
+        phraseBoundary: false
+      }, [processed.buffer]);
+    }
 
     return true;
   }

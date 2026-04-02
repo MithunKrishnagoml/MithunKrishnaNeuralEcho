@@ -12,37 +12,129 @@ interface UseOpenAIRealtimeProps {
   sendTranscriptToBackend: (text: string | object, direction: 'MY' | 'INCOMING' | 'DELTA' | 'SENTENCE_DONE') => void;
 }
 
-function buildInstructions(inputLang: string, outputLang: string) {
-  const inputLangName = inputLang === "en" ? "English" : "French";
-  const outputLangName = outputLang === "en" ? "English" : "French";
+type Register = "formal" | "casual" | "technical" | "emotional";
 
-  return `You are a professional real-time translator specializing in conversational ${inputLangName} to ${outputLangName} translation.
+interface ConversationHistory {
+  original: string;
+  translated: string;
+}
 
-CORE PRINCIPLES:
-- Translate ONLY the spoken content. Never add greetings, commentary, or explanations.
-- Maintain exact meaning, tone, and natural flow of conversation.
-- Preserve all proper names, numbers, dates, and technical terms exactly as spoken.
-- Use appropriate formality level matching the speaker's tone.
-- For ambiguous words, choose the most common conversational meaning.
+interface ConversationContext {
+  currentSentenceOriginal: string;
+  currentSentenceTranslated: string;
+  fullHistory: ConversationHistory[];
+}
 
-TRANSLATION QUALITY:
-- Use natural, conversational ${outputLangName} that sounds like a native speaker.
-- Maintain sentence structure and rhythm for real-time comprehension.
-- Handle idioms, slang, and colloquial expressions appropriately.
-- Preserve emotional tone: enthusiasm, hesitation, emphasis, questions.
+function detectRegister(history: ConversationHistory[]): Register {
+  const recentText = history
+    .slice(-3)
+    .map(h => h.original)
+    .join(" ")
+    .toLowerCase();
 
-TECHNICAL ACCURACY:
-- Numbers: "twenty-three" → "vingt-trois", "2024" → "deux mille vingt-quatre"
-- Dates: "March 15th" → "le quinze mars", "next Tuesday" → "mardi prochain"
-- Names: Keep exactly as pronounced, don't translate.
-- Technical terms: Use standard translations when appropriate.
+  const casualMarkers = /\b(yo|hey|gonna|wanna|gotta|yeah|nah|bro|dude|man|lol|omg|wtf)\b/;
+  const formalMarkers = /\b(therefore|regarding|pursuant|sincerely|accordingly|whereas)\b/;
+  const technicalMarkers = /\b(api|function|variable|deploy|server|debug|error|stack|async)\b/;
+  const emotionalMarkers = /(!{2,}|\?{2,}|please|urgent|help|sorry|thank|love|hate)/;
 
-CONVERSATION FLOW:
-- Respond immediately to maintain conversation rhythm.
-- Handle interruptions and topic changes smoothly.
-- Maintain context from previous utterances when appropriate.
+  if (casualMarkers.test(recentText)) return "casual";
+  if (formalMarkers.test(recentText)) return "formal";
+  if (technicalMarkers.test(recentText)) return "technical";
+  if (emotionalMarkers.test(recentText)) return "emotional";
+  return "casual"; // default to casual for natural conversation
+}
 
-You are a translation engine, not a conversational AI. Output only the translation.`;
+function isHallucination(text: string): boolean {
+  const cleaned = text.trim().toLowerCase();
+
+  // Empty or whitespace only
+  if (!cleaned) return true;
+
+  // Too short to be meaningful
+  if (cleaned.length < 2) return true;
+
+  // Known Whisper hallucination phrases
+  const hallucinations = [
+    "thank you.", "thanks.", "bye.", "bye bye.",
+    "you.", "okay.", "ok.", "mm-hmm.", "hmm.",
+    "uh.", "um.", "ah.", "oh.", "yeah.", "yes.",
+    "no.", "merci.", "au revoir.", "bonjour.",
+    "d'accord.", "oui.", "non.", "eh.",
+    "subtitles by", "transcript by",
+    "[ silence ]", "[silence]", "[ music ]"
+  ];
+
+  if (hallucinations.includes(cleaned)) return true;
+
+  // Repetition loop: "hello hello hello hello"
+  const words = cleaned.split(" ");
+  if (words.length >= 4) {
+    const unique = new Set(words);
+    if (unique.size === 1) return true; // all same word
+  }
+
+  return false;
+}
+
+function buildInstructions(
+  myLanguage: string,
+  targetLanguage: string,
+  register: Register,
+  contextHistory: ConversationHistory[]
+): string {
+  const registerGuides = {
+    casual: "Informal, natural, conversational. Contractions fine.",
+    formal: "Formal, professional. No contractions.",
+    technical: "Preserve all technical terms. Do not translate code or variable names.",
+    emotional: "Match emotional intensity. Urgent stays urgent. Warm stays warm."
+  };
+
+  const historyBlock = contextHistory.length > 0
+    ? `RECENT CONVERSATION:\n` +
+      contextHistory.slice(-5)
+        .map(h => `  "${h.original}" → "${h.translated}"`)
+        .join("\n")
+    : "";
+
+  return `
+    You are a professional real-time interpreter.
+    Input language: ${myLanguage}
+    Output language: ${targetLanguage}
+    Register: ${registerGuides[register]}
+
+    ${historyBlock}
+
+    RULES:
+    1. Translate ONLY. No commentary, no additions, no greetings.
+    2. Output the complete updated translation of the sentence so far.
+    3. Never translate proper nouns, phone numbers, URLs, or code.
+    4. Preserve tone, emotion, and urgency exactly.
+    5. If a word is unclear, use best contextual guess.
+       Never output "I didn't understand" or "[inaudible]".
+    6. Keep translations concise — do not pad or expand meaning.
+    7. For idiomatic expressions, use the equivalent idiom in
+       ${targetLanguage} — do not translate literally.
+  `;
+}
+
+function formatTranscript(text: string): string {
+  if (!text) return text;
+
+  let t = text.trim();
+
+  // Capitalize first letter
+  t = t.charAt(0).toUpperCase() + t.slice(1);
+
+  // Add period if no terminal punctuation
+  if (!/[.!?…]$/.test(t)) t += ".";
+
+  // Fix common ASR artifacts
+  t = t
+    .replace(/\bi\b/g, "I")               // lowercase i → I
+    .replace(/\s+/g, " ")                  // collapse spaces
+    .replace(/\s([.,!?])/g, "$1")          // remove space before punctuation
+
+  return t;
 }
 
 // Helper function to upsert transcripts
@@ -83,6 +175,16 @@ export function useOpenAIRealtime({
   const audioCtxRef = useRef<AudioContext | null>(null);
   const accumulatedTranscriptRef = useRef('');
 
+  // Conversation context for coherent translations
+  const conversationContextRef = useRef<ConversationContext>({
+    currentSentenceOriginal: '',
+    currentSentenceTranslated: '',
+    fullHistory: []
+  });
+
+  // Current register detection
+  const currentRegisterRef = useRef<Register>('casual');
+
   // Word-level streaming state
   const activeSentenceRef = useRef<{
     id: string;
@@ -94,6 +196,7 @@ export function useOpenAIRealtime({
   const sentenceEndTimerRef = useRef<NodeJS.Timeout | null>(null);
   const lastCommitTimeRef = useRef(0);
   const isMutedRef = useRef(true);
+  const rafRef = useRef<number | null>(null);
 
   const startMic = useCallback(async () => {
     try {
@@ -139,9 +242,9 @@ export function useOpenAIRealtime({
       source.connect(preprocessNode);
       preprocessNode.connect(processedDest);
 
-      // ── WORD-LEVEL AUDIO SEND LOOP ──
+      // ── TWO-TIER AUDIO SEND LOOP ──
       preprocessNode.port.onmessage = (e) => {
-        const { pcm, rms, wordBoundary } = e.data;
+        const { pcm, rms, wordBoundary, phraseBoundary, commitEnergy, commitDurationMs } = e.data;
 
         // Update VAD meter
         setMicLevel(Math.min(100, Math.round(rms * 500)));
@@ -167,27 +270,44 @@ export function useOpenAIRealtime({
           }));
         }
 
-        // ── STEP 3: On word boundary — commit + request response ──
-        if (wordBoundary && dc.readyState === "open") {
+        // ── STEP 3: Handle boundaries ──
+        if ((wordBoundary || phraseBoundary) && dc.readyState === "open") {
           lastCommitTimeRef.current = Date.now();
 
-          // Cancel any in-progress response for this speaker
+          // Energy-based hallucination filter
+          const MIN_ENERGY = 0.0003;  // minimum average RMS² to be real speech
+          const MIN_DURATION = 120;   // minimum 120ms of speech to commit
+
+          if (commitEnergy < MIN_ENERGY || commitDurationMs < MIN_DURATION) {
+            // Too short or too quiet — likely noise, not speech
+            console.warn("[VAD] Low energy/duration, clearing buffer:", { commitEnergy, commitDurationMs });
+            dc.send(JSON.stringify({ type: "input_audio_buffer.clear" }));
+            return;
+          }
+
+          // Cancel any in-progress response
           if (responseActiveRef.current) {
             dc.send(JSON.stringify({ type: "response.cancel" }));
             responseActiveRef.current = false;
           }
 
-          // Commit the buffered audio as a completed utterance
+          // Commit the buffered audio
           dc.send(JSON.stringify({
             type: "input_audio_buffer.commit"
           }));
 
-          // Immediately request translation + TTS
+          // Choose modalities based on boundary type
+          const modalities = phraseBoundary ? ["text", "audio"] : ["text"];
+          const instructions = phraseBoundary
+            ? buildInstructions(myLanguage, targetLanguage, currentRegisterRef.current, conversationContextRef.current.fullHistory)
+            : `Transcribe the new audio fragment. Output only the transcription.`;
+
+          // Request response
           dc.send(JSON.stringify({
             type: "response.create",
             response: {
-              modalities: ["text", "audio"],
-              instructions: `Translate the last utterance from ${myLanguage} to ${targetLanguage}. Output ONLY the translation. Speak it immediately.`
+              modalities,
+              instructions
             }
           }));
 
@@ -197,6 +317,24 @@ export function useOpenAIRealtime({
           clearTimeout(sentenceEndTimerRef.current);
           sentenceEndTimerRef.current = setTimeout(() => {
             if (activeSentenceRef.current) {
+              // Archive completed sentence
+              conversationContextRef.current.fullHistory.push({
+                original: conversationContextRef.current.currentSentenceOriginal,
+                translated: conversationContextRef.current.currentSentenceTranslated
+              });
+
+              // Keep only last 10 exchanges
+              if (conversationContextRef.current.fullHistory.length > 10) {
+                conversationContextRef.current.fullHistory.shift();
+              }
+
+              // Update register for next sentence
+              currentRegisterRef.current = detectRegister(conversationContextRef.current.fullHistory);
+
+              // Reset current sentence
+              conversationContextRef.current.currentSentenceOriginal = "";
+              conversationContextRef.current.currentSentenceTranslated = "";
+
               // Mark sentence as done
               setMyTranscripts(prev => upsert(prev, {
                 id: activeSentenceRef.current!.id,
@@ -205,6 +343,7 @@ export function useOpenAIRealtime({
                 status: "done",
                 timestamp: Date.now()
               }));
+
               // Send sentence done to backend
               sendTranscriptToBackend("", "SENTENCE_DONE");
               activeSentenceRef.current = null;
@@ -229,7 +368,7 @@ export function useOpenAIRealtime({
           type: 'session.update',
           session: {
             modalities: ['text', 'audio'],
-            instructions: buildInstructions(myLanguage, targetLanguage),
+            instructions: buildInstructions(myLanguage, targetLanguage, currentRegisterRef.current, conversationContextRef.current.fullHistory),
             voice: 'shimmer',
             input_audio_format: 'pcm16',
             output_audio_format: 'pcm16',
@@ -253,7 +392,17 @@ export function useOpenAIRealtime({
 
         switch (event.type) {
           case 'conversation.item.input_audio_transcription.completed':
-            // This fires per commit (per word)
+            // Filter hallucinations
+            if (isHallucination(event.transcript)) {
+              console.warn("[VAD] Hallucination filtered:", event.transcript);
+              dc.send(JSON.stringify({ type: "response.cancel" }));
+              return;
+            }
+
+            // Format transcript
+            const formattedTranscript = formatTranscript(event.transcript);
+
+            // Initialize sentence if needed
             if (!activeSentenceRef.current) {
               activeSentenceRef.current = {
                 id: nanoid(),
@@ -262,52 +411,75 @@ export function useOpenAIRealtime({
                 status: 'streaming'
               };
             }
-            activeSentenceRef.current.words.push({
-              original: event.transcript.trim(),
-              translated: ''
-            });
-            // Update UI with accumulated original words
+
+            // Accumulate original text
+            conversationContextRef.current.currentSentenceOriginal += (conversationContextRef.current.currentSentenceOriginal ? ' ' : '') + formattedTranscript;
+
+            // Update UI
             setMyTranscripts(prev => upsert(prev, {
               id: activeSentenceRef.current!.id,
-              originalText: activeSentenceRef.current!.words.map(w => w.original).join(' '),
-              translatedText: activeSentenceRef.current!.words.map(w => w.translated).filter(Boolean).join(' '),
+              originalText: conversationContextRef.current.currentSentenceOriginal,
+              translatedText: conversationContextRef.current.currentSentenceTranslated,
               status: 'streaming',
               timestamp: Date.now()
             }));
+
+            // Send delta to peer
+            sendTranscriptToBackend({
+              type: 'TRANSCRIPT_DELTA',
+              sentenceId: activeSentenceRef.current.id,
+              originalText: conversationContextRef.current.currentSentenceOriginal,
+              translatedText: conversationContextRef.current.currentSentenceTranslated,
+              wordCount: activeSentenceRef.current.words.length
+            }, 'DELTA');
             break;
 
           case 'response.audio_transcript.delta':
             accumulatedTranscriptRef.current += event.delta;
-            onIncomingTranscriptDelta(event.delta);
+            // Update current sentence translation
+            conversationContextRef.current.currentSentenceTranslated = accumulatedTranscriptRef.current;
+
+            // Update UI with rAF debouncing
+            if (!rafRef.current) {
+              rafRef.current = requestAnimationFrame(() => {
+                setMyTranscripts(prev => upsert(prev, {
+                  id: activeSentenceRef.current!.id,
+                  originalText: conversationContextRef.current.currentSentenceOriginal,
+                  translatedText: conversationContextRef.current.currentSentenceTranslated,
+                  status: 'streaming',
+                  timestamp: Date.now()
+                }));
+                rafRef.current = undefined;
+              });
+            }
+
+            // Send delta to peer
+            sendTranscriptToBackend({
+              type: 'TRANSCRIPT_DELTA',
+              sentenceId: activeSentenceRef.current?.id || '',
+              originalText: conversationContextRef.current.currentSentenceOriginal,
+              translatedText: conversationContextRef.current.currentSentenceTranslated,
+              wordCount: activeSentenceRef.current?.words.length || 0
+            }, 'DELTA');
             break;
 
           case 'response.audio_transcript.done':
-            // Translated word arrived
+            // Full translation arrived
             responseActiveRef.current = false;
-            const translatedWord = accumulatedTranscriptRef.current.trim();
-            if (activeSentenceRef.current && activeSentenceRef.current.words.length > 0) {
-              const lastWord = activeSentenceRef.current.words[activeSentenceRef.current.words.length - 1];
-              if (lastWord) lastWord.translated = translatedWord;
-            }
+            const fullTranslation = accumulatedTranscriptRef.current.trim();
 
-            // Update UI with accumulated translation
+            // Update context
+            conversationContextRef.current.currentSentenceTranslated = fullTranslation;
+
+            // Update UI
             if (activeSentenceRef.current) {
               setMyTranscripts(prev => upsert(prev, {
                 id: activeSentenceRef.current!.id,
-                originalText: activeSentenceRef.current.words.map(w => w.original).join(' '),
-                translatedText: activeSentenceRef.current.words.map(w => w.translated).filter(Boolean).join(' '),
+                originalText: conversationContextRef.current.currentSentenceOriginal,
+                translatedText: fullTranslation,
                 status: 'streaming',
                 timestamp: Date.now()
               }));
-
-              // Relay accumulated translation to peer via backend WS
-              sendTranscriptToBackend({
-                type: 'TRANSCRIPT_DELTA',
-                sentenceId: activeSentenceRef.current.id,
-                originalText: activeSentenceRef.current.words.map(w => w.original).join(' '),
-                translatedText: activeSentenceRef.current.words.map(w => w.translated).filter(Boolean).join(' '),
-                wordCount: activeSentenceRef.current.words.length
-              }, 'DELTA');
             }
 
             accumulatedTranscriptRef.current = '';

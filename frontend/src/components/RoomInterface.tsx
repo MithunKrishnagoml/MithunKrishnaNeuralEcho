@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -11,6 +11,68 @@ interface TranscriptMessage {
   text: string;
   timestamp: number;
 }
+
+interface TranscriptEntry {
+  id: string;
+  originalText: string;
+  translatedText: string;
+  status: 'streaming' | 'done';
+  timestamp: number;
+}
+
+// Virtualized Transcript List Component
+const TranscriptList = React.memo(({ entries, emptyMessage }: {
+  entries: TranscriptEntry[];
+  emptyMessage: string;
+}) => {
+  const endRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    // Only scroll on new entry, not on delta updates
+    if (entries.length > 0) {
+      endRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [entries.length]); // Only depend on length, not content
+
+  return (
+    <div className="space-y-2 max-h-96 overflow-y-auto">
+      {entries.map((entry, i) =>
+        i < entries.length - 1
+          ? <FrozenTranscriptEntry key={entry.id} entry={entry} />
+          : <LiveTranscriptEntry key={entry.id} entry={entry} />
+      )}
+      {entries.length === 0 && (
+        <p className="text-sm text-muted-foreground">{emptyMessage}</p>
+      )}
+      <div ref={endRef} />
+    </div>
+  );
+});
+
+const FrozenTranscriptEntry = React.memo(({ entry }: { entry: TranscriptEntry }) => (
+  <div className={`p-2 rounded bg-slate-800`}>
+    <p className="text-sm text-foreground">{entry.originalText}</p>
+    {entry.translatedText && (
+      <p className="text-sm text-blue-400 mt-1">{entry.translatedText}</p>
+    )}
+    <p className="text-xs text-muted-foreground">
+      {new Date(entry.timestamp).toLocaleTimeString()}
+    </p>
+  </div>
+), () => true); // Never re-render frozen entries
+
+const LiveTranscriptEntry = ({ entry }: { entry: TranscriptEntry }) => (
+  <div className={`p-2 rounded ${entry.status === 'streaming' ? 'bg-blue-950 border-l-2 border-blue-500' : 'bg-slate-800'}`}>
+    <p className="text-sm text-foreground">{entry.originalText}</p>
+    {entry.translatedText && (
+      <p className="text-sm text-blue-400 mt-1">{entry.translatedText}</p>
+    )}
+    <p className="text-xs text-muted-foreground">
+      {new Date(entry.timestamp).toLocaleTimeString()}
+      {entry.status === 'streaming' && <span className="ml-2 text-blue-500">•</span>}
+    </p>
+  </div>
+);
 
 export function RoomInterface() {
   const { roomId } = useParams<{ roomId: string }>();
@@ -186,46 +248,20 @@ export function RoomInterface() {
           <Card className="bg-card border-border">
             <CardContent className="p-4">
               <h3 className="font-semibold mb-3 text-foreground">Your Speech</h3>
-              <div className="space-y-2 max-h-96 overflow-y-auto">
-                {myTranscripts.map((transcript) => (
-                  <div key={transcript.id} className={`p-2 rounded ${transcript.status === 'streaming' ? 'bg-blue-950 border-l-2 border-blue-500' : 'bg-slate-800'}`}>
-                    <p className="text-sm text-foreground">{transcript.originalText}</p>
-                    {transcript.translatedText && (
-                      <p className="text-sm text-blue-400 mt-1">{transcript.translatedText}</p>
-                    )}
-                    <p className="text-xs text-muted-foreground">
-                      {new Date(transcript.timestamp).toLocaleTimeString()}
-                      {transcript.status === 'streaming' && <span className="ml-2 text-blue-500">•</span>}
-                    </p>
-                  </div>
-                ))}
-                {myTranscripts.length === 0 && (
-                  <p className="text-sm text-muted-foreground">Start speaking to see your transcript...</p>
-                )}
-              </div>
+              <TranscriptList
+                entries={myTranscripts}
+                emptyMessage="Start speaking to see your transcript..."
+              />
             </CardContent>
           </Card>
 
           <Card className="bg-card border-border">
             <CardContent className="p-4">
               <h3 className="font-semibold mb-3 text-foreground">Translated Speech</h3>
-              <div className="space-y-2 max-h-96 overflow-y-auto">
-                {incomingTranscripts.map((transcript) => (
-                  <div key={transcript.id} className={`p-2 rounded ${transcript.status === 'streaming' ? 'bg-green-950 border-l-2 border-green-500' : 'bg-slate-800'}`}>
-                    <p className="text-sm text-foreground">{transcript.originalText}</p>
-                    {transcript.translatedText && (
-                      <p className="text-sm text-green-400 mt-1">{transcript.translatedText}</p>
-                    )}
-                    <p className="text-xs text-muted-foreground">
-                      {new Date(transcript.timestamp).toLocaleTimeString()}
-                      {transcript.status === 'streaming' && <span className="ml-2 text-green-500">•</span>}
-                    </p>
-                  </div>
-                ))}
-                {incomingTranscripts.length === 0 && (
-                  <p className="text-sm text-muted-foreground">Waiting for translation...</p>
-                )}
-              </div>
+              <TranscriptList
+                entries={incomingTranscripts}
+                emptyMessage="Waiting for translation..."
+              />
             </CardContent>
           </Card>
         </div>
