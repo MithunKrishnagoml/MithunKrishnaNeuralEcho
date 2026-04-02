@@ -312,20 +312,23 @@ wss.on('connection', (ws, req) => {
             }));
           } else {
             // Second participant - room is ready
-            const otherParticipant = Array.from(session.participants.values())
-              .find(p => p.userId !== userId);
-
-            // Notify both participants
+            // Notify both participants with correct otherParticipant info
             for (const participant of session.participants.values()) {
-              participant.ws.send(JSON.stringify({
-                type: 'ROOM_READY',
-                participantCount: 2,
-                otherParticipant: {
-                  id: otherParticipant.userId,
-                  name: otherParticipant.name,
-                  language: otherParticipant.language
-                }
-              }));
+              // Find the OTHER participant for each user
+              const otherParticipant = Array.from(session.participants.values())
+                .find(p => p.userId !== participant.userId);
+              
+              if (otherParticipant) {
+                participant.ws.send(JSON.stringify({
+                  type: 'ROOM_READY',
+                  participantCount: 2,
+                  otherParticipant: {
+                    id: otherParticipant.userId,
+                    name: otherParticipant.name,
+                    language: otherParticipant.language
+                  }
+                }));
+              }
             }
           }
           break;

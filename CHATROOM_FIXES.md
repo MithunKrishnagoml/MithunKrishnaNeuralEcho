@@ -13,19 +13,19 @@
 
 **Fix:** Scoped `AppProvider` to only single-user routes (/, /admin, /phone, /documents) and excluded chatroom routes (/chatroom, /join/:roomId).
 
+**Status:** ✅ Already fixed in current codebase
+
 **File:** `neuralecho/frontend/src/App.tsx`
 
-### Bug 2: Backend Sending USER_JOINED_ROOM to the Joiner Themselves
-**Problem:** When a user joined a room, the backend was sending `USER_JOINED_ROOM` back to the same user who just joined, causing confusion in the frontend logic.
+### Bug 2: Backend Sending Incorrect otherParticipant Info in ROOM_READY
+**Problem:** When the second participant joined a room, the backend was finding `otherParticipant` once outside the notification loop, causing both users to receive the same `otherParticipant` object instead of each receiving info about the OTHER user.
 
 **Symptoms:**
-```
-📥 [USER_JOINED_ROOM] Is this me joining? true
-📥 [USER_JOINED_ROOM] participantCount: 1
-ℹ️ [USER_JOINED_ROOM] Not setting otherParticipant. Reason: participantCount = 1
-```
+- Both participants might receive incorrect participant information
+- Potential confusion in participant state management
+- otherParticipant not being set correctly on the frontend
 
-**Fix:** Removed the code that sends `USER_JOINED_ROOM` to the joiner. Now only OTHER participants receive this notification.
+**Fix:** Moved the `otherParticipant` lookup inside the notification loop so each participant receives the correct information about the OTHER user.
 
 **File:** `neuralecho/backend/index.js`
 
@@ -33,32 +33,31 @@
 
 ### User A (First to Join)
 1. Connects to room
-2. Receives `WAITING_FOR_PARTICIPANT` (participantCount: 1)
+2. Receives `WAITING` (participantCount: 1)
 3. Waits for User B
 
 ### User B (Second to Join)
 1. Connects to room
-2. Does NOT receive `USER_JOINED_ROOM` about themselves
-3. Receives `translation_ready` when both are connected
+2. Receives `ROOM_READY` with otherParticipant = User A's info
+3. Translation session begins
 
 ### User A (After User B Joins)
-1. Receives `USER_JOINED_ROOM` notification about User B
-2. `otherParticipant` state is set
-3. Receives `translation_ready`
-4. Translation session begins
+1. Receives `ROOM_READY` with otherParticipant = User B's info
+2. `otherParticipant` state is set correctly
+3. Translation session begins
 
 ## Testing Checklist
 
 - [ ] Open chatroom page - no WebRTC logs should appear
 - [ ] No "DataChannel not open" errors
 - [ ] User A joins - sees "Waiting for participant"
-- [ ] User B joins - User A receives USER_JOINED_ROOM notification
-- [ ] User B does NOT receive USER_JOINED_ROOM about themselves
-- [ ] Both users receive translation_ready
+- [ ] User B joins - both users receive ROOM_READY
+- [ ] User A receives correct info about User B
+- [ ] User B receives correct info about User A
 - [ ] Microphone works correctly for both users
 - [ ] Translation flows bidirectionally
 
 ## Files Modified
 
-1. `neuralecho/frontend/src/App.tsx` - Scoped AppProvider to single-user routes only
-2. `neuralecho/backend/index.js` - Removed USER_JOINED_ROOM echo to joiner
+1. `neuralecho/frontend/src/App.tsx` - Scoped AppProvider to single-user routes only (already fixed)
+2. `neuralecho/backend/index.js` - Fixed otherParticipant lookup in ROOM_READY notification
