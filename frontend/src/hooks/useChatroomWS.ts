@@ -51,7 +51,14 @@ export function useChatroomWS({
   const connect = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
 
-    const ws = new WebSocket(`ws://localhost:3001`);
+    // Determine WebSocket URL based on environment
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const host = window.location.hostname;
+    const port = window.location.port ? `:${window.location.port}` : '';
+    const wsUrl = `${protocol}//${host}${port}`;
+    
+    console.log('🔌 [WS] Connecting to:', wsUrl);
+    const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
     ws.onopen = () => {
@@ -176,8 +183,10 @@ export function useChatroomWS({
       }, 3000);
     };
 
-    ws.onerror = (error) => {
-      console.error('❌ [WS] Error:', error);
+    ws.onerror = (event: Event) => {
+      const wsEvent = event as Event;
+      console.error('❌ [WS] WebSocket error:', wsEvent);
+      setStatus('disconnected');
     };
   }, [roomId, userId, userName, userLanguage, onRoomReady, onMyTranscript, onIncomingTranscript, onPeerLeft, onPeerMuteState]);
 
