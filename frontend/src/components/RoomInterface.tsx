@@ -115,7 +115,7 @@ export function RoomInterface() {
         <div className="flex items-center justify-between mb-6">
           <div className="flex items-center gap-4">
             <h1 className="text-2xl font-bold text-foreground">Bilingual Chatroom</h1>
-            <Badge variant={connectionStatus === 'ready' ? 'default' : 'secondary'} className={connectionStatus === 'ready' ? 'bg-green-600' : connectionStatus === 'error' ? 'bg-red-600' : 'bg-yellow-600'}>
+            <Badge variant={connectionStatus === 'ready' ? 'default' : connectionStatus === 'disconnected' ? 'destructive' : 'secondary'} className={connectionStatus === 'ready' ? 'bg-green-600' : connectionStatus === 'disconnected' ? 'bg-red-600' : 'bg-yellow-600'}>
               {connectionStatus === 'ready' ? '🟢 Connected' :
                connectionStatus === 'connecting' ? '🟡 Connecting...' :
                connectionStatus === 'waiting' ? '🟡 Waiting for participant...' :
