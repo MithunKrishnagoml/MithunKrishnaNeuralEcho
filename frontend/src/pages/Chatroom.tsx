@@ -57,54 +57,29 @@ const Chatroom = () => {
 
   const handleCreateRoom = useCallback(async (data: CreateRoomData) => {
     setIsLoading(true);
-    
+
     try {
-      // Call the server API to create a session
-      const response = await fetch(`${BACKEND_URL}/api/session/create`, {
+      const response = await fetch(`${BACKEND_URL}/api/room/create`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          language: data.language
-        })
+        body: JSON.stringify({})
       });
 
       if (!response.ok) {
-        throw new Error('Failed to create session');
+        throw new Error('Failed to create room');
       }
 
       const result = await response.json();
-      const roomId = result.sessionId;
+      const roomId = result.roomId;
 
-      const newParticipant: ChatroomParticipant = {
-        id: generateParticipantId(),
-        name: data.name,
-        language: data.language,
-        joinedAt: new Date(),
-        isConnected: true
-      };
+      // Navigate to room
+      window.location.href = `/room/${roomId}?name=${encodeURIComponent(data.name)}&language=${encodeURIComponent(data.language)}`;
 
-      setCurrentRoom(roomId);
-      setParticipant(newParticipant);
-      
-      // Always use stable production URL for share link
-      const baseUrl = import.meta.env.VITE_APP_BASE_URL || window.location.origin;
-      const shareableLink = `${baseUrl}/join/${roomId}`;
-      
-      toast.success(`Room created!`, {
-        description: shareableLink,
-        action: {
-          label: "Copy Link",
-          onClick: () => {
-            navigator.clipboard.writeText(shareableLink);
-            toast.success("Link copied to clipboard!");
-          }
-        }
-      });
     } catch (error) {
       console.error('Error creating room:', error);
-      toast.error('Failed to create room. Please try again.');
+      toast.error('Failed to create room');
     } finally {
       setIsLoading(false);
     }
@@ -112,41 +87,24 @@ const Chatroom = () => {
 
   const handleJoinRoom = useCallback(async (data: JoinRoomData) => {
     setIsLoading(true);
-    
+
     try {
-      // Call the server API to join a session
-      const response = await fetch(`${BACKEND_URL}/api/session/join`, {
+      const response = await fetch(`${BACKEND_URL}/api/room/${data.roomId}/join`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          sessionId: data.roomId,
-          language: data.language
-        })
+        body: JSON.stringify({})
       });
 
       if (!response.ok) {
         const errorData = await response.json();
-        throw new Error(errorData.error || 'Failed to join session');
+        throw new Error(errorData.error || 'Failed to join room');
       }
 
-      const result = await response.json();
+      // Navigate to room
+      window.location.href = `/room/${data.roomId}?name=${encodeURIComponent(data.name)}&language=${encodeURIComponent(data.language)}`;
 
-      const newParticipant: ChatroomParticipant = {
-        id: generateParticipantId(),
-        name: data.name,
-        language: data.language,
-        joinedAt: new Date(),
-        isConnected: true
-      };
-
-      setCurrentRoom(data.roomId);
-      setParticipant(newParticipant);
-      
-      toast.success(`Joined room: ${data.roomId}`, {
-        description: `Welcome ${data.name}! Translation session is ready.`
-      });
     } catch (error) {
       console.error('Error joining room:', error);
       toast.error(error instanceof Error ? error.message : 'Failed to join room. Please try again.');

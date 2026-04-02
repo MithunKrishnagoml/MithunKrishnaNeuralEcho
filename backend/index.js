@@ -5,14 +5,13 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { WebSocketServer } from 'ws';
 import { createServer } from 'http';
-import WebSocket from 'ws';
+import { nanoid } from 'nanoid';
 
-// Load environment variables from parent directory or current directory
-// Deployment trigger: Fixed syntax error - REDEPLOY NOW
+// Load environment variables
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 dotenv.config({ path: join(__dirname, '../.env') });
-dotenv.config({ path: join(__dirname, '.env') }); // Also check current directory
+dotenv.config({ path: join(__dirname, '.env') });
 
 const app = express();
 const server = createServer(app);
@@ -28,8 +27,7 @@ app.use(cors({
       'https://neuralecho1.vercel.app',
       'https://neural-echo.vercel.app'
     ];
-    
-    // Allow all Vercel preview deployments
+
     if (!origin || allowedOrigins.includes(origin) || origin.endsWith('.vercel.app')) {
       callback(null, true);
     } else {
@@ -41,350 +39,75 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
 }));
 app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
 
-// Store active translation sessions
-const translationSessions = new Map();
-const activeConnections = new Map();
-const chunkSeq = {}; // Track audio chunk sequence per user
-
-// Translation session structure
-class TranslationSession {
-  constructor(sessionId) {
-    this.sessionId = sessionId;
-    this.participants = new Map(); // userId -> { language, socket, openaiWs }
-    this.messageHistory = []; // Array of conversation messages
-    this.transcriptHistory = []; // Array of transcript messages with full details
-    this.recording = null; // Recording session data
+// Room session structure
+class RoomSession {
+  constructor(roomId) {
+    this.roomId = roomId;
+    this.participants = new Map(); // userId -> { userId, name, language, ws, openaiSessionActive }
     this.createdAt = Date.now();
   }
-
-  addParticipant(userId, language, socket, name = null) {
-    this.participants.set(userId, {
-      language,
-      socket,
-      name,
-      openaiWs: null,
-      audioBuffer: [],
-      lastRequestTime: null,
-      joinedAt: Date.now(),
-      totalProcessingTime: 0,
-      requestCount: 0,
-      pendingMessage: null, // For tracking translation in progress
-      audioSequenceNumber: 0, // Track audio chunk sequence
-      currentResponseId: null, // Track current OpenAI response
-      isStreaming: false // Track if currently streaming translation
-    });
-    console.log(`Added participant ${userId} with language ${language} to session ${this.sessionId}`);
-  }
-
-  removeParticipant(userId) {
-    const participant = this.participants.get(userId);
-    if (participant) {
-      // Close OpenAI connection
-      if (participant.openaiWs) {
-        participant.openaiWs.close();
-      }
-      
-      // Clear any pending message timeouts
-      if (participant.pendingMessageTimeout) {
-        clearTimeout(participant.pendingMessageTimeout);
-        participant.pendingMessageTimeout = null;
-      }
-      
-      // Clear silence timer
-      if (participant.silenceTimer) {
-        clearTimeout(participant.silenceTimer);
-        participant.silenceTimer = null;
-      }
-      
-      // Clear pending message
-      participant.pendingMessage = null;
-    }
-    
-    this.participants.delete(userId);
-    
-    // Clean up chunk sequence tracking
-    if (typeof chunkSeq !== 'undefined' && chunkSeq[userId] !== undefined) {
-      delete chunkSeq[userId];
-    }
-    
-    console.log(`Removed participant ${userId} from session ${this.sessionId}`);
-  }
-
-  getOtherParticipant(userId) {
-    for (const [otherUserId, participant] of this.participants.entries()) {
-      if (otherUserId !== userId) {
-        return { userId: otherUserId, ...participant };
-      }
-    }
-    return null;
-  }
-
-  getParticipant(userId) {
-    return this.participants.get(userId);
-  }
-
-  addMessage(messageData) {
-    // Get participant name from the participants map
-    const participant = this.participants.get(messageData.participantId);
-    const participantName = participant?.name || `Participant ${messageData.participantId}`;
-    
-    this.messageHistory.push({
-      id: messageData.messageId,
-      participantId: messageData.participantId,
-      participantName: participantName,
-      originalText: messageData.originalText,
-      translatedText: messageData.translatedText,
-      originalLanguage: messageData.originalLanguage,
-      targetLanguage: messageData.targetLanguage,
-      timestamp: messageData.timestamp
-    });
-    
-    console.log(`=��� Added message to session ${this.sessionId} history. Total messages: ${this.messageHistory.length}`);
-  }
-
-  addTranscriptMessage(transcriptData) {
-    const transcriptMessage = {
-      messageId: transcriptData.messageId || `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-      roomId: this.sessionId,
-      speakerId: transcriptData.speakerId,
-      speakerName: transcriptData.speakerName,
-      sourceLanguage: transcriptData.sourceLanguage,
-      targetLanguage: transcriptData.targetLanguage,
-      originalTranscript: transcriptData.originalTranscript,
-      translatedTranscript: transcriptData.translatedTranscript,
-      timestamp: transcriptData.timestamp || Date.now(),
-      confidence: transcriptData.confidence,
-      processingTime: transcriptData.processingTime
-    };
-
-    this.transcriptHistory.push(transcriptMessage);
-    console.log(`=��� Added transcript message to session ${this.sessionId}. Total transcripts: ${this.transcriptHistory.length}`);
-    
-    return transcriptMessage;
-  }
-
-  getMessageHistory() {
-    return this.messageHistory;
-  }
-
-  getTranscriptHistory() {
-    return this.transcriptHistory;
-  }
-
-  startRecording() {
-    this.recording = {
-      recordingId: `rec_${this.sessionId}_${Date.now()}`,
-      roomId: this.sessionId,
-      startTime: Date.now(),
-      participants: Array.from(this.participants.keys()),
-      status: 'recording',
-      format: 'mp3'
-    };
-    console.log(`=��� Started recording for session ${this.sessionId}`);
-    return this.recording;
-  }
-
-  stopRecording() {
-    if (this.recording) {
-      this.recording.endTime = Date.now();
-      this.recording.status = 'stopped';
-      this.recording.duration = this.recording.endTime - this.recording.startTime;
-      console.log(`GŦn+� Stopped recording for session ${this.sessionId}`);
-    }
-    return this.recording;
-  }
-
-  getRecording() {
-    return this.recording;
-  }
 }
 
-// Helper function to safely send messages to participants
-function safeSend(socket, data, context = '') {
-  if (!socket) {
-    console.warn(`⚠️ [safeSend] ${context} - Socket is null/undefined`);
-    return false;
-  }
-  
-  if (socket.readyState !== WebSocket.OPEN) {
-    console.warn(`⚠️ [safeSend] ${context} - Socket not open, readyState: ${socket.readyState}`);
-    return false;
-  }
-  
-  try {
-    socket.send(JSON.stringify(data));
-    return true;
-  } catch (error) {
-    console.error(`❌ [safeSend] ${context} - Error sending message:`, error);
-    return false;
-  }
-}
-
-function buildTranslationInstructions(inputLang, outputLang) {
-  const inputLangName = inputLang === "en" ? "English" : "French";
-  const outputLangName = outputLang === "en" ? "English" : "French";
-
-  return `You are a strict real-time translator for phone-call-like conversations.
-
-Your role:
-- Listen to ${inputLangName} speech
-- Translate to ${outputLangName} in real-time
-- Speak the translation naturally with appropriate tone
-
-Rules:
-1. Translate ONLY. No explanations, no greetings, no commentary.
-2. Preserve meaning and tone exactly as spoken.
-3. Keep names, numbers, and dates exactly as heard.
-4. Never respond conversationally. You are a translation engine.
-5. Speak naturally in ${outputLangName} with appropriate emotion and pacing.
-
-Examples:
-${inputLangName}: "Hello, how are you?" → ${outputLangName}: "Bonjour, comment allez-vous?"
-${inputLangName}: "Thank you very much" → ${outputLangName}: "Merci beaucoup"`;
-}
-
-// Create OpenAI Realtime WebSocket session for translation
-async function createOpenAISession(inputLang, outputLang) {
-  return new Promise((resolve, reject) => {
-    const ws = new WebSocket('wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-12-17', {
-      headers: {
-        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
-        'OpenAI-Beta': 'realtime=v1'
-      }
-    });
-
-    ws.on('open', () => {
-      console.log(`✅ [OpenAI] Session opened for ${inputLang} → ${outputLang}`);
-      
-      // Configure session for translation
-      ws.send(JSON.stringify({
-        type: 'session.update',
-        session: {
-          modalities: ['text', 'audio'],
-          instructions: buildTranslationInstructions(inputLang, outputLang),
-          voice: 'shimmer',
-          input_audio_format: 'pcm16',
-          output_audio_format: 'pcm16',
-          input_audio_transcription: { 
-            model: 'whisper-1', 
-            language: inputLang 
-          },
-          turn_detection: null  // CRITICAL: Disable auto-response to prevent hallucination
-        }
-      }));
-      
-      resolve(ws);
-    });
-
-    ws.on('error', (error) => {
-      console.error(`❌ [OpenAI] Session error for ${inputLang} → ${outputLang}:`, error);
-      reject(error);
-    });
-  });
-}
-
-// Wire OpenAI output to target participant
-function wireOpenAIOutput(openaiWs, targetParticipant, session, speakerId) {
-  let chunkSeq = 0;
-
-  // Keepalive ping every 30s to prevent OpenAI WS timeout
-  const pingInterval = setInterval(() => {
-    if (openaiWs.readyState === WebSocket.OPEN) {
-      openaiWs.ping?.();
-    } else {
-      clearInterval(pingInterval);
-    }
-  }, 30000);
-
-  openaiWs.on('message', (raw) => {
+// Safe WebSocket send function
+function safeSend(ws, message) {
+  if (ws.readyState === WebSocket.OPEN) {
     try {
-      const event = JSON.parse(raw);
-
-      // Stream translated audio to target participant in real time
-      if (event.type === 'response.audio.delta') {
-        // Re-fetch target participant to ensure fresh socket reference
-        const freshTarget = session.participants.get(targetParticipant.userId || 
-          Array.from(session.participants.keys()).find(id => id !== speakerId));
-        
-        if (freshTarget) {
-          safeSend(freshTarget.socket, {
-            type: 'TRANSLATED_AUDIO_CHUNK',
-            audioData: event.delta, // base64 PCM16
-            chunkId: `chunk_${speakerId}_${chunkSeq++}`,
-            speakerId,
-            timestamp: Date.now()
-          }, `Audio chunk to target participant`);
-        }
-      }
-
-      // Send transcript to SPEAKER (their own words)
-      if (event.type === 'conversation.item.input_audio_transcription.completed') {
-        const speakerParticipant = session.participants.get(speakerId);
-        safeSend(speakerParticipant?.socket, {
-          type: 'MY_TRANSCRIPT',
-          text: event.transcript,
-          speakerId,
-          timestamp: Date.now()
-        }, `MY_TRANSCRIPT to speaker ${speakerId}`);
-      }
-
-      // Send translation text to LISTENER (what they're hearing)
-      if (event.type === 'response.audio_transcript.done') {
-        // Re-fetch target participant to ensure fresh socket reference
-        const freshTarget = session.participants.get(targetParticipant.userId || 
-          Array.from(session.participants.keys()).find(id => id !== speakerId));
-        
-        if (freshTarget) {
-          safeSend(freshTarget.socket, {
-            type: 'INCOMING_TRANSCRIPT',
-            text: event.transcript,
-            speakerId,
-            timestamp: Date.now()
-          }, `INCOMING_TRANSCRIPT to listener`);
-        }
-      }
+      ws.send(JSON.stringify(message));
     } catch (error) {
-      console.error('❌ [OpenAI] Error processing message:', error);
+      console.error('Error sending WebSocket message:', error);
     }
-  });
-
-  openaiWs.on('error', (error) => {
-    console.error(`❌ [OpenAI] WebSocket error for speaker ${speakerId}:`, error);
-  });
-
-  openaiWs.on('close', () => {
-    clearInterval(pingInterval);
-    console.log(`🔌 [OpenAI] Session closed for speaker ${speakerId}`);
-    
-    // Notify participant that translation service disconnected
-    const speakerParticipant = session.participants.get(speakerId);
-    safeSend(speakerParticipant?.socket, {
-      type: 'error',
-      message: 'Translation service disconnected. Please rejoin.'
-    }, `Error notification to speaker ${speakerId}`);
-  });
+  }
 }
+
+// Store active room sessions
+const roomSessions = new Map();
 
 // API Routes
 
-// Create OpenAI Realtime session (ephemeral token for WebRTC)
-app.post('/api/openai/realtime-session', async (req, res) => {
+// Create room
+app.post('/api/room/create', (req, res) => {
+  const roomId = nanoid(8);
+  const session = new RoomSession(roomId);
+  roomSessions.set(roomId, session);
+
+  const joinUrl = `${req.protocol}://${req.get('host')}/room/${roomId}`;
+
+  console.log(`🏠 [ROOM] Created room ${roomId}`);
+  res.json({ roomId, joinUrl });
+});
+
+// Join room
+app.post('/api/room/:roomId/join', (req, res) => {
+  const { roomId } = req.params;
+  const session = roomSessions.get(roomId);
+
+  if (!session) {
+    return res.status(404).json({ error: 'Room not found' });
+  }
+
+  // Count live connections
+  let liveParticipants = 0;
+  for (const participant of session.participants.values()) {
+    if (participant.ws.readyState === WebSocket.OPEN) {
+      liveParticipants++;
+    }
+  }
+
+  if (liveParticipants >= 2) {
+    return res.status(400).json({ error: 'Room is full' });
+  }
+
+  res.json({ success: true, participantCount: liveParticipants });
+});
+
+// Get OpenAI ephemeral token
+app.get('/api/openai-token', async (req, res) => {
   try {
-    const config = req.body;
-    
-    // Validate OpenAI API key
     if (!process.env.OPENAI_API_KEY) {
-      return res.status(500).json({ 
-        error: 'OpenAI API key not configured',
-        message: 'Server is missing OPENAI_API_KEY environment variable'
-      });
+      return res.status(500).json({ error: 'OpenAI API key not configured' });
     }
 
-    console.log('🔧 [OpenAI Session] Creating ephemeral token for WebRTC');
-    
-    // Create ephemeral token via OpenAI API
     const response = await fetch('https://api.openai.com/v1/realtime/sessions', {
       method: 'POST',
       headers: {
@@ -393,1219 +116,262 @@ app.post('/api/openai/realtime-session', async (req, res) => {
       },
       body: JSON.stringify({
         model: 'gpt-4o-realtime-preview-2024-12-17',
-        voice: config.voice || 'alloy',
-        instructions: config.instructions,
-        input_audio_format: config.input_audio_format || 'pcm16',
-        output_audio_format: config.output_audio_format || 'pcm16',
-        input_audio_transcription: config.input_audio_transcription,
-        turn_detection: config.turn_detection,
-        modalities: config.modalities || ['text', 'audio'],
-        max_response_output_tokens: config.max_response_output_tokens
-      }),
+        voice: 'shimmer'
+      })
     });
 
     if (!response.ok) {
-      const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
-      console.error('❌ [OpenAI Session] Failed to create session:', {
-        status: response.status,
-        error: errorData
-      });
-      
-      return res.status(response.status).json({
-        error: 'Failed to create OpenAI session',
-        message: errorData.error?.message || errorData.message || 'Unknown error',
-        details: errorData
-      });
+      throw new Error(`OpenAI API error: ${response.status}`);
     }
 
-    const sessionData = await response.json();
-    console.log('✅ [OpenAI Session] Ephemeral token created successfully');
-    
-    res.json(sessionData);
-
+    const data = await response.json();
+    res.json({ client_secret: { value: data.client_secret.value } });
   } catch (error) {
-    console.error('❌ [OpenAI Session] Error:', error);
-    res.status(500).json({ 
-      error: 'Internal server error',
-      message: error.message 
-    });
+    console.error('❌ [OpenAI Token] Error:', error);
+    res.status(500).json({ error: 'Failed to get OpenAI token' });
   }
 });
 
-// Create a new translation session
-app.post('/api/session/create', (req, res) => {
-  try {
-    const { language } = req.body;
-
-    // Validate language
-    if (!["en-US", "fr-CA"].includes(language)) {
-      return res.status(400).json({ error: "Language must be en-US or fr-CA" });
-    }
-
-    const sessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    const translationSession = new TranslationSession(sessionId);
-    translationSessions.set(sessionId, translationSession);
-
-    res.json({
-      success: true,
-      sessionId,
-      message: `Translation session created for ${language === "en-US" ? "English" : "French"} speaker`,
-    });
-
-  } catch (error) {
-    console.error('Error creating session:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Join an existing translation session
-app.post('/api/session/join', (req, res) => {
-  try {
-    const { sessionId, language } = req.body;
-
-    // Validate language
-    if (!["en-US", "fr-CA"].includes(language)) {
-      return res.status(400).json({ error: "Language must be en-US or fr-CA" });
-    }
-
-    const translationSession = translationSessions.get(sessionId);
-    if (!translationSession) {
-      return res.status(404).json({ error: "Session not found" });
-    }
-
-    if (translationSession.participants.size >= 2) {
-      return res.status(400).json({ error: "Session is full" });
-    }
-
-    res.json({
-      success: true,
-      sessionId,
-      participantCount: translationSession.participants.size,
-      message: `Ready to join session for ${language === "en-US" ? "English" : "French"} speaker`,
-    });
-
-  } catch (error) {
-    console.error('Error joining session:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Get session status
-app.get('/api/session/:sessionId/status', (req, res) => {
-  try {
-    const { sessionId } = req.params;
-    
-    const translationSession = translationSessions.get(sessionId);
-    if (!translationSession) {
-      return res.status(404).json({ error: "Session not found" });
-    }
-
-    const participants = Array.from(translationSession.participants.entries()).map(([userId, participant]) => ({
-      userId,
-      language: participant.language,
-      connected: participant.socket?.readyState === WebSocket.OPEN
-    }));
-
-    res.json({
-      sessionId,
-      participantCount: translationSession.participants.size,
-      participants,
-      createdAt: translationSession.createdAt,
-      status: translationSession.participants.size === 2 ? 'active' : 'waiting',
-      messageCount: translationSession.messageHistory?.length || 0
-    });
-
-  } catch (error) {
-    console.error('Error getting session status:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Get session transcript history
-app.get('/api/session/:sessionId/transcript', (req, res) => {
-  try {
-    const { sessionId } = req.params;
-    const { format = 'json' } = req.query;
-    
-    const translationSession = translationSessions.get(sessionId);
-    if (!translationSession) {
-      return res.status(404).json({ error: "Session not found" });
-    }
-
-    const transcriptHistory = translationSession.getTranscriptHistory() || [];
-    const messageHistory = translationSession.getMessageHistory() || [];
-    
-    // Get participant names
-    const participantNames = {};
-    translationSession.participants.forEach((participant, userId) => {
-      participantNames[userId] = participant.name || `Participant ${userId}`;
-    });
-    
-    if (format === 'txt') {
-      // Generate plain text transcript
-      let txtContent = `NeuralEcho Translation Session Transcript\n`;
-      txtContent += `Session ID: ${sessionId}\n`;
-      txtContent += `Generated: ${new Date().toISOString()}\n`;
-      txtContent += `Total Messages: ${messageHistory.length}\n\n`;
-      txtContent += `${'='.repeat(50)}\n\n`;
-      
-      messageHistory.forEach((message, index) => {
-        const timestamp = new Date(message.timestamp).toLocaleString();
-        const speakerName = message.participantName || participantNames[message.participantId] || `Participant ${message.participantId}`;
-        txtContent += `[${timestamp}] ${speakerName}\n`;
-        txtContent += `Original (${message.originalLanguage}): ${message.originalText}\n`;
-        txtContent += `Translation (${message.targetLanguage}): ${message.translatedText}\n\n`;
-      });
-      
-      // Create filename with participant names
-      const namesArray = Object.values(participantNames);
-      const namesStr = namesArray.join('_').replace(/[^a-zA-Z0-9_-]/g, '_');
-      const dateStr = new Date().toISOString().slice(0, 19).replace(/:/g, '-');
-      
-      res.setHeader('Content-Type', 'text/plain');
-      res.setHeader('Content-Disposition', `attachment; filename="neuralecho_transcript_${namesStr}_${dateStr}.txt"`);
-      res.send(txtContent);
-    } else {
-      // Return JSON format
-      res.json({
-        sessionId,
-        generatedAt: new Date().toISOString(),
-        messageHistory,
-        transcriptHistory,
-        totalMessages: messageHistory.length,
-        participants: Array.from(translationSession.participants.entries()).map(([userId, participant]) => ({
-          userId,
-          name: participant.name,
-          language: participant.language,
-          joinedAt: participant.joinedAt,
-          totalProcessingTime: participant.totalProcessingTime,
-          requestCount: participant.requestCount
-        }))
-      });
-    }
-
-  } catch (error) {
-    console.error('Error getting transcript:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Get session recording
-app.get('/api/session/:sessionId/recording', (req, res) => {
-  try {
-    const { sessionId } = req.params;
-    
-    const translationSession = translationSessions.get(sessionId);
-    if (!translationSession) {
-      return res.status(404).json({ error: "Session not found" });
-    }
-
-    const recording = translationSession.getRecording();
-    if (!recording) {
-      return res.status(404).json({ error: "No recording found for this session" });
-    }
-
-    res.json({
-      sessionId,
-      recording: {
-        recordingId: recording.recordingId,
-        startTime: recording.startTime,
-        endTime: recording.endTime,
-        duration: recording.duration,
-        status: recording.status,
-        format: recording.format,
-        participants: recording.participants
-      }
-    });
-
-  } catch (error) {
-    console.error('Error getting recording:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-const STREAMING_MESSAGE_TYPES = new Set([
-  'PARTIAL_TRANSCRIPT',
-  'TRANSLATION_DELTA',
-  'AUDIO_CHUNK',
-  'VOICE_ACTIVITY_STARTED',
-  'VOICE_ACTIVITY_STOPPED'
-]);
-
-function relayStreamingMessage(data, senderWs) {
-  const connection = activeConnections.get(senderWs);
-  if (!connection) return;
-
-  const { sessionId, userId } = connection;
-  const translationSession = translationSessions.get(sessionId);
-  if (!translationSession) return;
-
-  // Relay streaming messages to other participants
-  let payload = {
-    ...data,
-    participantId: data.participantId || userId,
-    sessionId: data.sessionId || sessionId,
-    timestamp: data.timestamp || Date.now(),
-  };
-
-  for (const participant of translationSession.participants.values()) {
-    if (participant.socket !== senderWs && participant.socket?.readyState === WebSocket.OPEN) {
-      participant.socket.send(JSON.stringify(payload));
-    }
-  }
-}
-
-// WebSocket handler for real-time translation
+// WebSocket Server (signaling + transcript relay only)
 wss.on('connection', (ws, req) => {
-  console.log('WebSocket connection opened for translation');
-  
-  // Send connection confirmation
-  ws.send(JSON.stringify({ 
-    type: 'CONNECTION_ESTABLISHED', 
-    message: 'Connected to NeuralEcho translation server' 
-  }));
-  
-  ws.on('message', async (message) => {
+  console.log('🔌 [WS] New connection established');
+  let connectionId = null;
+  let currentRoomId = null;
+  let currentUserId = null;
+
+  ws.on('message', (message) => {
     try {
-      const data = JSON.parse(message);
-      console.log('=��� [SERVER] Received message:', data.type);
+      const data = JSON.parse(message.toString());
+      console.log('📨 [WS] Received:', data.type);
 
-      if (STREAMING_MESSAGE_TYPES.has(data.type)) {
-        relayStreamingMessage(data, ws);
-        return;
-      }
-      
-      if (data.type === 'join_session') {
-        const { sessionId, userId, language } = data;
-        const name = data.name || 'Anonymous';
-        
-        console.log('═══════════════════════════════════════════════════════');
-        console.log('📥 [BACKEND] join_session request received');
-        console.log('📥 [BACKEND] Session ID:', sessionId);
-        console.log('📥 [BACKEND] User ID:', userId);
-        console.log('📥 [BACKEND] User Name:', name);
-        console.log('📥 [BACKEND] Language:', language);
-        console.log('📥 [BACKEND] WebSocket readyState:', ws.readyState);
-        console.log('═══════════════════════════════════════════════════════');
-        
-        const translationSession = translationSessions.get(sessionId);
-        if (!translationSession) {
-          console.error('❌ [BACKEND] Session not found:', sessionId);
-          ws.send(JSON.stringify({ type: 'error', message: 'Session not found' }));
-          return;
-        }
+      switch (data.type) {
+        case 'JOIN_ROOM': {
+          const { roomId, userId, name, language } = data;
+          const session = roomSessions.get(roomId);
 
-        console.log('✅ [BACKEND] Session found. Current participants:', translationSession.participants.size);
-        
-        if (translationSession.participants.size >= 2) {
-          console.error('❌ [BACKEND] Session is full');
-          ws.send(JSON.stringify({ type: 'error', message: 'Session is full' }));
-          return;
-        }
+          if (!session) {
+            ws.send(JSON.stringify({ type: 'ERROR', message: 'Room not found' }));
+            return;
+          }
 
-        // Add participant to session
-        translationSession.addParticipant(userId, language, ws, name);
-        activeConnections.set(ws, { sessionId, userId });
-
-        console.log('═══════════════════════════════════════════════════════');
-        console.log('👤 [BACKEND] Participant added successfully');
-        console.log('👤 [BACKEND] User ID:', userId);
-        console.log('👤 [BACKEND] Total participants now:', translationSession.participants.size);
-        console.log('👤 [BACKEND] All participant IDs:', Array.from(translationSession.participants.keys()));
-        console.log('═══════════════════════════════════════════════════════');
-
-        // If this is the first participant, send waiting message
-        if (translationSession.participants.size === 1) {
-          console.log('⏳ [BACKEND] First participant - sending WAITING_FOR_PARTICIPANT');
-          safeSend(ws, {
-            type: 'WAITING_FOR_PARTICIPANT',
-            message: 'Waiting for the other participant to join...',
-            sessionId,
-            participantCount: 1
-          }, 'WAITING_FOR_PARTICIPANT to first participant');
-        }
-
-        // Notify successful join to the joining user
-        console.log('📤 [BACKEND] Sending USER_JOINED_ROOM to joining user:', userId);
-        safeSend(ws, { 
-          type: 'USER_JOINED_ROOM', 
-          sessionId, 
-          userId,
-          participantCount: translationSession.participants.size,
-          language: language,
-          newParticipantName: name
-        }, `USER_JOINED_ROOM to joining user ${userId}`);
-
-        // Notify all existing participants about the new joiner
-        console.log('═══════════════════════════════════════════════════════');
-        console.log('📢 [BACKEND] Notifying existing participants about new joiner');
-        let notificationCount = 0;
-        for (const [existingUserId, participant] of translationSession.participants.entries()) {
-          // Re-fetch participant from Map to ensure fresh socket reference
-          const freshParticipant = translationSession.participants.get(existingUserId);
-          if (freshParticipant && freshParticipant.socket !== ws) {
-            const sent = safeSend(freshParticipant.socket, {
-              type: 'USER_JOINED_ROOM',
-              sessionId,
-              participantCount: translationSession.participants.size,
-              newParticipantLanguage: language,
-              newParticipantName: name,
-              userId: userId
-            }, `USER_JOINED_ROOM notification to ${existingUserId}`);
-            
-            if (sent) {
-              console.log('📤 [BACKEND] Successfully sent USER_JOINED_ROOM notification to:', existingUserId);
-              notificationCount++;
+          // Count live connections
+          let liveParticipants = 0;
+          for (const participant of session.participants.values()) {
+            if (participant.ws.readyState === WebSocket.OPEN) {
+              liveParticipants++;
             }
           }
-        }
-        console.log('📢 [BACKEND] Sent', notificationCount, 'notifications to existing participants');
-        console.log('═══════════════════════════════════════════════════════');
 
-        // Send conversation history to new participant
-        if (translationSession.messageHistory && translationSession.messageHistory.length > 0) {
-          ws.send(JSON.stringify({
-            type: 'ROOM_HISTORY_UPDATE',
-            sessionId,
-            messageHistory: translationSession.messageHistory,
-            totalMessages: translationSession.messageHistory.length
-          }));
-        }
+          if (liveParticipants >= 2) {
+            ws.send(JSON.stringify({ type: 'ERROR', message: 'Room is full' }));
+            return;
+          }
 
-        // Initialize OpenAI sessions when both participants join
-        if (translationSession.participants.size === 2) {
-          console.log('═══════════════════════════════════════════════════════');
-          console.log('🚀 [BACKEND] TWO PARTICIPANTS DETECTED!');
-          console.log('🚀 [BACKEND] Session:', sessionId);
-          console.log('🚀 [BACKEND] Initializing OpenAI sessions...');
-          
-          const [userA, userB] = Array.from(translationSession.participants.entries());
-          console.log('🚀 [BACKEND] User A:', userA[0], '(', userA[1].name, ')', userA[1].language);
-          console.log('🚀 [BACKEND] User B:', userB[0], '(', userB[1].name, ')', userB[1].language);
-          console.log('═══════════════════════════════════════════════════════');
-          
-          // Normalize language codes (en-US → en, fr-CA → fr)
-          const langA = userA[1].language.toLowerCase().startsWith('en') ? 'en' : 'fr';
-          const langB = userB[1].language.toLowerCase().startsWith('en') ? 'en' : 'fr';
-          
-          try {
-            // Session A: translates userA's language → userB's language
-            const sessionA = await createOpenAISession(langA, langB);
-            userA[1].openaiWs = sessionA;
-            
-            // Session B: translates userB's language → userA's language
-            const sessionB = await createOpenAISession(langB, langA);
-            userB[1].openaiWs = sessionB;
-            
-            // Wire OpenAI output → other participant
-            wireOpenAIOutput(sessionA, userB[1], translationSession, userA[0]);
-            wireOpenAIOutput(sessionB, userA[1], translationSession, userB[0]);
-            
-            console.log('✅ [BACKEND] OpenAI sessions initialized successfully');
-            
-            // Notify all participants that translation is ready
-            console.log('═══════════════════════════════════════════════════════');
-            console.log('📢 [BACKEND] Sending translation_ready to all participants');
-            let readyCount = 0;
-            for (const [currentUserId, participant] of translationSession.participants.entries()) {
-              // Re-fetch participant from Map to ensure fresh socket reference
-              const freshParticipant = translationSession.participants.get(currentUserId);
-              if (freshParticipant) {
-                const otherParticipant = Array.from(translationSession.participants.entries())
-                  .find(([userId]) => userId !== currentUserId);
-                
-                console.log('📤 [BACKEND] Attempting to send translation_ready to:', currentUserId);
-                console.log('📤 [BACKEND] Other participant info:', {
-                  id: otherParticipant ? otherParticipant[0] : 'none',
-                  name: otherParticipant ? otherParticipant[1].name : 'none',
-                  language: otherParticipant ? otherParticipant[1].language : 'none'
-                });
-                
-                const sent = safeSend(freshParticipant.socket, { 
-                  type: 'translation_ready',
-                  message: 'Both participants connected. Translation is live.',
-                  participantCount: 2,
-                  otherParticipant: otherParticipant ? {
-                    id: otherParticipant[0],
-                    name: otherParticipant[1].name || 'Other Participant',
-                    language: otherParticipant[1].language
-                  } : null
-                }, `translation_ready to ${currentUserId}`);
-                
-                if (sent) {
-                  console.log('✅ [BACKEND] translation_ready sent successfully to:', currentUserId);
-                  readyCount++;
-                } else {
-                  console.error('❌ [BACKEND] Failed to send translation_ready to:', currentUserId);
+          // Add participant
+          session.participants.set(userId, {
+            userId,
+            name,
+            language,
+            ws,
+            openaiSessionActive: false
+          });
+
+          connectionId = userId;
+          currentRoomId = roomId;
+          currentUserId = userId;
+
+          console.log(`👤 [ROOM] ${userId} joined room ${roomId}, participants: ${liveParticipants + 1}`);
+
+          if (liveParticipants + 1 === 1) {
+            // First participant
+            ws.send(JSON.stringify({
+              type: 'WAITING',
+              participantCount: 1
+            }));
+          } else {
+            // Second participant - room is ready
+            const otherParticipant = Array.from(session.participants.values())
+              .find(p => p.userId !== userId);
+
+            // Notify both participants
+            for (const participant of session.participants.values()) {
+              participant.ws.send(JSON.stringify({
+                type: 'ROOM_READY',
+                participantCount: 2,
+                otherParticipant: {
+                  id: otherParticipant.userId,
+                  name: otherParticipant.name,
+                  language: otherParticipant.language
                 }
-              }
-            }
-            console.log('📢 [BACKEND] Sent translation_ready to', readyCount, 'participants');
-            console.log('═══════════════════════════════════════════════════════');
-          } catch (error) {
-            console.error(`❌ Failed to initialize OpenAI sessions for ${sessionId}:`, error);
-            
-            // Notify participants of error
-            for (const participant of translationSession.participants.values()) {
-              if (participant.socket?.readyState === WebSocket.OPEN) {
-                participant.socket.send(JSON.stringify({
-                  type: 'error',
-                  message: 'Failed to initialize translation service. Please try again.'
-                }));
-              }
+              }));
             }
           }
+          break;
         }
-      }
 
-      // Handle voice activity events (relay to all participants)
-      if (data.type === 'VOICE_ACTIVITY_STARTED' || data.type === 'VOICE_ACTIVITY_STOPPED') {
-        const { participantId } = data;
-        const speaking = data.type === 'VOICE_ACTIVITY_STARTED';
-        
-        console.log(`🎤 [VAD] ${speaking ? 'Speech started' : 'Speech stopped'} for participant: ${participantId}`);
-        
-        const connection = activeConnections.get(ws);
-        if (!connection) return;
+        case 'TRANSCRIPT': {
+          const { roomId, userId, text, direction } = data;
+          const session = roomSessions.get(roomId);
 
-        const { sessionId } = connection;
-        const translationSession = translationSessions.get(sessionId);
-        if (!translationSession) return;
+          if (!session) return;
 
-        // Broadcast VAD event to ALL participants
-        for (const [userId, participant] of translationSession.participants.entries()) {
-          if (participant.socket?.readyState === WebSocket.OPEN) {
-            participant.socket.send(JSON.stringify({
-              type: 'vad_speaking',
-              sessionId: sessionId,
-              speakerId: participantId,
-              speaking: speaking,
-              timestamp: Date.now()
+          // Find the other participant
+          const otherParticipant = Array.from(session.participants.values())
+            .find(p => p.userId !== userId);
+
+          if (!otherParticipant) return;
+
+          if (direction === 'MY') {
+            // Send to sender as their own transcript
+            ws.send(JSON.stringify({
+              type: 'MY_TRANSCRIPT',
+              text,
+              speakerId: userId
             }));
-            
-            console.log(`🎤 [VAD] Sent vad_speaking event to participant ${userId}: speakerId=${participantId}, speaking=${speaking}`);
-          }
-        }
-      }
-
-      // Handle speech transcript for room-based translation
-      if (data.type === 'SPEECH_TRANSCRIPT') {
-        const { participantId, transcript, language } = data;
-        console.log(`=��� [ROOM TRANSCRIPT] From ${participantId} (${language}): "${transcript}"`);
-        console.log(`=��� [TRANSCRIPT DEBUG] Processing transcript at ${new Date().toISOString()}`);
-        
-        const connection = activeConnections.get(ws);
-        if (!connection) {
-          console.error('G�� No connection found for transcript');
-          return;
-        }
-
-        const { sessionId } = connection;
-        const translationSession = translationSessions.get(sessionId);
-        if (!translationSession) {
-          console.error('G�� No translation session found');
-          return;
-        }
-
-        // Only process if we have 2 participants
-        if (translationSession.participants.size !== 2) {
-          console.log('GŦ Waiting for second participant before processing transcript');
-          console.log(`=��� [TRANSCRIPT DEBUG] Current participant count: ${translationSession.participants.size}`);
-          return;
-        }
-
-        // Get the participant who sent the transcript
-        const participant = translationSession.participants.get(participantId);
-        if (!participant) {
-          console.error('G�� Participant not found in session');
-          return;
-        }
-
-        // Get the other participant (target for translation)
-        const otherParticipant = translationSession.getOtherParticipant(participantId);
-        if (!otherParticipant) {
-          console.error('G�� Other participant not found');
-          return;
-        }
-
-        console.log(`🎤 [TRANSCRIPT DEBUG] Participants ready - relaying transcript`);
-        
-        // Send transcript to ORIGINAL participant for immediate local bubble updates
-        if (participant.socket?.readyState === WebSocket.OPEN) {
-          participant.socket.send(JSON.stringify({
-            type: 'SPEECH_TRANSCRIPT',
-            fromParticipant: participantId,
-            originalText: transcript,
-            originalLanguage: language,
-            timestamp: Date.now()
-          }));
-          console.log(`✅ [TRANSCRIPT DEBUG] Transcript sent to original participant (${language})`);
-        } else {
-          console.warn(`⚠️ [TRANSCRIPT DEBUG] Original participant socket not available`);
-        }
-
-        // Relay transcript to other participant only - no server-side translation re-processing.
-        if (otherParticipant.socket?.readyState === WebSocket.OPEN) {
-          otherParticipant.socket.send(JSON.stringify({
-            type: 'SPEECH_TRANSCRIPT',
-            fromParticipant: participantId,
-            originalText: transcript,
-            originalLanguage: language,
-            timestamp: Date.now(),
-          }));
-        }
-      }
-
-      // Handle recording start
-      if (data.type === 'START_RECORDING') {
-        const connection = activeConnections.get(ws);
-        if (!connection) return;
-
-        const { sessionId } = connection;
-        const translationSession = translationSessions.get(sessionId);
-        if (!translationSession) return;
-
-        const recording = translationSession.startRecording();
-        
-        // Notify all participants that recording started
-        for (const participant of translationSession.participants.values()) {
-          if (participant.socket?.readyState === WebSocket.OPEN) {
-            participant.socket.send(JSON.stringify({
-              type: 'RECORDING_STARTED',
-              sessionId,
-              recordingId: recording.recordingId,
-              startTime: recording.startTime
+          } else if (direction === 'INCOMING') {
+            // Send to other participant as incoming transcript
+            otherParticipant.ws.send(JSON.stringify({
+              type: 'INCOMING_TRANSCRIPT',
+              text,
+              speakerId: userId
             }));
           }
-        }
-      }
-
-      // Handle recording stop
-      if (data.type === 'STOP_RECORDING') {
-        const connection = activeConnections.get(ws);
-        if (!connection) return;
-
-        const { sessionId } = connection;
-        const translationSession = translationSessions.get(sessionId);
-        if (!translationSession) return;
-
-        const recording = translationSession.stopRecording();
-        
-        // Notify all participants that recording stopped
-        for (const participant of translationSession.participants.values()) {
-          if (participant.socket?.readyState === WebSocket.OPEN) {
-            participant.socket.send(JSON.stringify({
-              type: 'RECORDING_STOPPED',
-              sessionId,
-              recordingId: recording?.recordingId,
-              endTime: recording?.endTime,
-              duration: recording?.duration
-            }));
-          }
-        }
-      }
-
-      // Handle transcript history request
-      if (data.type === 'GET_TRANSCRIPT_HISTORY') {
-        const connection = activeConnections.get(ws);
-        if (!connection) return;
-
-        const { sessionId } = connection;
-        const translationSession = translationSessions.get(sessionId);
-        if (!translationSession) return;
-
-        ws.send(JSON.stringify({
-          type: 'TRANSCRIPT_HISTORY_UPDATE',
-          sessionId,
-          transcriptHistory: translationSession.getTranscriptHistory(),
-          totalMessages: translationSession.transcriptHistory.length
-        }));
-      }
-
-      // Handle session end
-      if (data.type === 'END_SESSION') {
-        const connection = activeConnections.get(ws);
-        if (!connection) return;
-
-        const { sessionId } = connection;
-        const translationSession = translationSessions.get(sessionId);
-        if (!translationSession) return;
-
-        // Stop recording if active
-        if (translationSession.recording?.status === 'recording') {
-          translationSession.stopRecording();
+          break;
         }
 
-        // Send session_complete to all participants
-        const sessionSummary = {
-          type: 'session_complete',
-          sessionId: sessionId,
-          endTime: Date.now(),
-          totalMessages: translationSession.messageHistory?.length || 0,
-          transcriptDownloadUrl: `/api/session/${sessionId}/transcript`,
-          recordingDownloadUrl: translationSession.recording ? `/api/session/${sessionId}/recording` : null
-        };
+        case 'TRANSCRIPT_DELTA': {
+          // Word-level update — forward to peer immediately
+          const { roomId, userId, sentenceId, originalText, translatedText, wordCount } = data;
+          const session = roomSessions.get(roomId);
 
-        // Notify all participants that session ended
-        for (const participant of translationSession.participants.values()) {
-          if (participant.socket?.readyState === WebSocket.OPEN) {
-            participant.socket.send(JSON.stringify(sessionSummary));
-          }
-        }
-      }
+          if (!session) return;
 
-      // Handle bilingual message from frontend (text with translation)
-      if (data.type === 'SEND_BILINGUAL_MESSAGE' || data.type === 'BILINGUAL_MESSAGE') {
-        console.log(`📨 [BILINGUAL_MESSAGE] Received from client:`, data);
-        
-        // Extract message from nested structure
-        const messageData = data.message || data;
-        const { id: messageId, speakerId: participantId, originalText, translatedText, originalLanguage, targetLanguage } = messageData;
-        
-        console.log(`📨 [BILINGUAL_MESSAGE] From ${participantId}: "${originalText}" -> "${translatedText}"`);
-        
-        const connection = activeConnections.get(ws);
-        if (!connection) {
-          console.warn('⚠️ No connection found for BILINGUAL_MESSAGE');
-          return;
-        }
+          // Find the other participant
+          const otherParticipant = Array.from(session.participants.values())
+            .find(p => p.userId !== userId);
 
-        const { sessionId } = connection;
-        const translationSession = translationSessions.get(sessionId);
-        if (!translationSession) {
-          console.warn('⚠️ No translation session found for BILINGUAL_MESSAGE');
-          return;
-        }
+          if (!otherParticipant) return;
 
-        // Create message object
-        const message = {
-          id: messageId,
-          speakerId: participantId,
-          originalText: originalText,
-          translatedText: translatedText,
-          originalLanguage: originalLanguage,
-          targetLanguage: targetLanguage,
-          timestamp: messageData.timestamp || Date.now()
-        };
-
-        // Add to session message history
-        translationSession.addMessage({
-          messageId: messageId,
-          participantId: participantId,
-          originalText: originalText,
-          translatedText: translatedText,
-          originalLanguage: originalLanguage,
-          targetLanguage: targetLanguage,
-          timestamp: new Date(message.timestamp)
-        });
-
-        console.log(`✅ [BILINGUAL_MESSAGE] Added to session history. Total messages: ${translationSession.messageHistory.length}`);
-
-        // Broadcast to ALL participants in the room (including sender)
-        for (const [userId, participant] of translationSession.participants.entries()) {
-          if (participant.socket?.readyState === WebSocket.OPEN) {
-            participant.socket.send(JSON.stringify({
-              type: 'BILINGUAL_MESSAGE',
-              sessionId: sessionId,
-              message: message
-            }));
-            console.log(`📤 [BILINGUAL_MESSAGE] Sent to participant ${userId}`);
-          }
-        }
-      }
-
-      // Handle AI audio chunks from OpenAI (relay to all participants)
-      if (data.type === 'AI_AUDIO_CHUNK') {
-        const { participantId, audioData, seq } = data;
-        
-        // Log every 50th chunk to avoid spam
-        if (seq % 50 === 0) {
-          console.log(`[RELAY] AI_AUDIO_CHUNK from ${participantId}, seq: ${seq}, size: ${audioData?.length || 0}`);
-        }
-        
-        const connection = activeConnections.get(ws);
-        if (!connection) return;
-
-        const { sessionId, userId: senderUserId } = connection;
-        const translationSession = translationSessions.get(sessionId);
-        if (!translationSession) return;
-
-        // Broadcast to ALL participants (including sender for local playback)
-        for (const [userId, participant] of translationSession.participants.entries()) {
-          if (participant.socket?.readyState === WebSocket.OPEN) {
-            const chunkMessage = {
-              type: 'AUDIO_CHUNK',
-              sessionId: sessionId,
-              participantId: 'ai-agent',  // AI has its own ID
-              audioData: audioData,
-              chunkId: `ai_chunk_${seq}`,
-              responseId: `ai_response_${senderUserId}`,
-              timestamp: Date.now(),
-              speakerId: senderUserId // Track which user's AI this is
-            };
-
-            participant.socket.send(JSON.stringify(chunkMessage));
-            
-            if (seq % 50 === 0) {
-              console.log(`[RELAY] Sent chunk #${seq} to participant ${userId}`);
-            }
-          }
-        }
-      }
-
-      // Handle AI audio stream end
-      if (data.type === 'AI_AUDIO_END') {
-        const { participantId } = data;
-        console.log(`🏁 [AI_AUDIO_END] From ${participantId}`);
-        
-        const connection = activeConnections.get(ws);
-        if (!connection) return;
-
-        const { sessionId, userId: senderUserId } = connection;
-        const translationSession = translationSessions.get(sessionId);
-        if (!translationSession) return;
-
-        // Send stream end to the other participant only
-        const otherParticipant = translationSession.getOtherParticipant(senderUserId);
-        
-        if (otherParticipant?.socket?.readyState === WebSocket.OPEN) {
-          const endMessage = {
-            type: 'AUDIO_STREAM_END',
-            sessionId: sessionId,
-            participantId: 'ai-agent',  // ✅ Match the AI participantId
-            responseId: `ai_response_${Date.now()}`,
-            timestamp: Date.now()
-          };
-
-          otherParticipant.socket.send(JSON.stringify(endMessage));
-          console.log(`🏁 [AI_AUDIO_END] Sent to other participant with participantId: ai-agent`);
-        }
-      }
-
-      // Handle translated audio from frontend
-      if (data.type === 'TRANSLATED_AUDIO') {
-        const { participantId, audioData, originalText, translatedText, messageId } = data;
-        console.log(`🎧 [TRANSLATED_AUDIO] From ${participantId}, audio size: ${audioData?.length || 0}`);
-        
-        const connection = activeConnections.get(ws);
-        if (!connection) {
-          console.warn('⚠️ No connection found for TRANSLATED_AUDIO');
-          return;
-        }
-
-        const { sessionId } = connection;
-        const translationSession = translationSessions.get(sessionId);
-        if (!translationSession) {
-          console.warn('⚠️ No translation session found for TRANSLATED_AUDIO');
-          return;
-        }
-
-        const audioEvent = {
-          type: 'TRANSLATED_AUDIO',
-          sessionId: translationSession.sessionId,
-          fromParticipant: participantId,
-          audioData: audioData,
-          originalText: originalText,
-          translatedText: translatedText,
-          messageId: messageId,
-          timestamp: Date.now()
-        };
-
-        // Send translated audio to ALL participants (including sender)
-        let sentCount = 0;
-        for (const [userId, participant] of translationSession.participants.entries()) {
-          if (participant.socket && participant.socket.readyState === WebSocket.OPEN) {
-            participant.socket.send(JSON.stringify(audioEvent));
-            sentCount++;
-            console.log(`🎧 [ROOM AUDIO] Sent translated audio to participant ${userId}`);
-          }
-        }
-        
-        if (sentCount === 0) {
-          console.warn(`⚠️ [ROOM AUDIO] No participants available to receive audio`);
-        } else {
-          console.log(`🎧 [ROOM AUDIO] Broadcast translated audio to ${sentCount} participant(s) (${audioData?.length || 0} bytes)`);
-        }
-        
-        // Add to recording if active
-        if (translationSession.recording?.status === 'recording') {
-          translationSession.addAudioToRecording({
-            type: 'translated_audio',
-            fromParticipant: participantId,
-            audioData: audioData,
-            originalText: originalText,
-            translatedText: translatedText,
+          safeSend(otherParticipant.ws, {
+            type: 'PEER_TRANSCRIPT_DELTA',
+            speakerId: userId,
+            speakerName: session.participants.get(userId)?.name || 'Unknown',
+            sentenceId,
+            originalText,
+            translatedText,
+            wordCount,
             timestamp: Date.now()
           });
+          break;
         }
-      }
 
-      // Handle real-time audio chunks
-      // ⚠️ DISABLED: Raw participant audio should NOT be relayed
-      // Only AI_AUDIO_CHUNK (translations) should reach the other participant
-      // This prevents double-playback of both raw voice and translation
-      if (data.type === 'AUDIO_CHUNK') {
-        const { participantId, sequenceNumber } = data;
-        console.log(`🎵 [AUDIO_CHUNK] From ${participantId}, seq: ${sequenceNumber} - SKIPPING relay (raw audio not needed)`);
-        
-        // DO NOT RELAY - frontend will only play AI_AUDIO_CHUNK (translations)
-        // Relaying this causes the listener to hear both the original voice AND the translation
-        
-        /* DISABLED CODE:
-        const connection = activeConnections.get(ws);
-        if (!connection) return;
+        case 'SENTENCE_DONE': {
+          // Speaker paused long enough — sentence is complete
+          const { roomId, userId } = data;
+          const session = roomSessions.get(roomId);
 
-        const { sessionId } = connection;
-        const translationSession = translationSessions.get(sessionId);
-        if (!translationSession) return;
+          if (!session) return;
 
-        // Immediately relay audio chunk to other participant with zero buffering
-        const otherParticipant = translationSession.getOtherParticipant(participantId);
-        if (otherParticipant?.socket?.readyState === WebSocket.OPEN) {
-          const chunkMessage = {
-            type: 'AUDIO_CHUNK',
-            sessionId: sessionId,
-            participantId: participantId,
-            pcmData: pcmData,
-            sampleRate: sampleRate || 24000,
-            sequenceNumber: sequenceNumber || 0,
-            responseId: responseId,
+          // Find the other participant
+          const otherParticipant = Array.from(session.participants.values())
+            .find(p => p.userId !== userId);
+
+          if (!otherParticipant) return;
+
+          safeSend(otherParticipant.ws, {
+            type: 'PEER_TRANSCRIPT_SENTENCE_DONE',
+            speakerId: userId,
+            sentenceId: data.sentenceId,
             timestamp: Date.now()
-          };
-          
-          otherParticipant.socket.send(JSON.stringify(chunkMessage));
-          console.log(`🎵 [AUDIO_CHUNK] Relayed to other participant: seq ${sequenceNumber}`);
-        } else {
-          console.log(`🎵 [AUDIO_CHUNK] No other participant to relay to`);
-        }
-        */
-      }
-
-      // Handle audio stream end
-      if (data.type === 'AUDIO_STREAM_END') {
-        const { participantId, responseId } = data;
-        console.log(`🏁 [AUDIO_STREAM_END] From ${participantId}, response: ${responseId}`);
-        
-        const connection = activeConnections.get(ws);
-        if (!connection) return;
-
-        const { sessionId } = connection;
-        const translationSession = translationSessions.get(sessionId);
-        if (!translationSession) return;
-
-        // Relay stream end to other participant
-        const otherParticipant = translationSession.getOtherParticipant(participantId);
-        if (otherParticipant?.socket?.readyState === WebSocket.OPEN) {
-          const endMessage = {
-            type: 'AUDIO_STREAM_END',
-            sessionId: sessionId,
-            fromParticipant: participantId,
-            responseId: responseId,
-            timestamp: Date.now()
-          };
-          
-          otherParticipant.socket.send(JSON.stringify(endMessage));
-          console.log(`🏁 [AUDIO_STREAM_END] Relayed to other participant`);
-        }
-      }
-
-      // ✅ NEW: Handle streaming mic audio chunks (TRUE STREAMING - ~20ms chunks)
-      // This replaces the old MIC_AUDIO batching approach
-      if (data.type === 'MIC_AUDIO_CHUNK') {
-        const { audioData, timestamp } = data; // base64 PCM16 from mic (~20ms chunk)
-        const connection = activeConnections.get(ws);
-        if (!connection) return;
-
-        const { sessionId, userId } = connection;
-        const translationSession = translationSessions.get(sessionId);
-        if (!translationSession) return;
-
-        const participant = translationSession.participants.get(userId);
-        if (!participant?.openaiWs || participant.openaiWs.readyState !== WebSocket.OPEN) {
-          console.warn(`⚠️ [MIC_AUDIO_CHUNK] OpenAI session not ready for ${userId}`);
-          return;
+          });
+          break;
         }
 
-        // ✅ CRITICAL: Send immediately to OpenAI - no batching, no waiting
-        // This is the key to <500ms latency
-        participant.openaiWs.send(JSON.stringify({
-          type: 'input_audio_buffer.append',
-          audio: audioData
-        }));
-        
-        // Track last audio time for silence detection
-        participant.lastAudioTime = Date.now();
-      }
+        case 'MUTE_STATE': {
+          const { roomId, userId, isMuted } = data;
+          const session = roomSessions.get(roomId);
 
-      // ✅ NEW: Handle commit audio buffer signal (silence detected)
-      if (data.type === 'COMMIT_AUDIO_BUFFER') {
-        const connection = activeConnections.get(ws);
-        if (!connection) return;
+          if (!session) return;
 
-        const { sessionId, userId } = connection;
-        const translationSession = translationSessions.get(sessionId);
-        if (!translationSession) return;
+          // Find the other participant
+          const otherParticipant = Array.from(session.participants.values())
+            .find(p => p.userId !== userId);
 
-        const participant = translationSession.participants.get(userId);
-        if (!participant?.openaiWs || participant.openaiWs.readyState !== WebSocket.OPEN) {
-          console.warn(`⚠️ [COMMIT_AUDIO_BUFFER] OpenAI session not ready for ${userId}`);
-          return;
-        }
-
-        // Clear existing silence timer
-        if (participant.silenceTimer) {
-          clearTimeout(participant.silenceTimer);
-          participant.silenceTimer = null;
-        }
-
-        // Commit the audio buffer and trigger response
-        participant.openaiWs.send(JSON.stringify({
-          type: 'input_audio_buffer.commit'
-        }));
-        
-        // Create response to trigger translation
-        participant.openaiWs.send(JSON.stringify({
-          type: 'response.create',
-          response: {
-            modalities: ['text', 'audio'],
-            instructions: 'Translate the speech you just heard.'
-          }
-        }));
-        
-        console.log(`🎤 [COMMIT_AUDIO_BUFFER] Speech ended for ${userId}, triggering translation`);
-      }
-
-      // Handle incoming mic audio from frontend (OLD - kept for backward compatibility)
-      if (data.type === 'MIC_AUDIO') {
-        const { audioData } = data; // base64 PCM16 from mic
-        const connection = activeConnections.get(ws);
-        if (!connection) return;
-
-        const { sessionId, userId } = connection;
-        const translationSession = translationSessions.get(sessionId);
-        if (!translationSession) return;
-
-        const participant = translationSession.participants.get(userId);
-        if (!participant?.openaiWs || participant.openaiWs.readyState !== WebSocket.OPEN) {
-          console.warn(`⚠️ [MIC_AUDIO] OpenAI session not ready for ${userId}`);
-          return;
-        }
-
-        // Send audio directly to OpenAI for translation
-        participant.openaiWs.send(JSON.stringify({
-          type: 'input_audio_buffer.append',
-          audio: audioData
-        }));
-        
-        // Track last audio time for silence detection
-        participant.lastAudioTime = Date.now();
-        
-        // Clear existing silence timer
-        if (participant.silenceTimer) {
-          clearTimeout(participant.silenceTimer);
-        }
-        
-        // Set new silence timer - commit audio buffer after 500ms of silence
-        participant.silenceTimer = setTimeout(() => {
-          if (participant.openaiWs?.readyState === WebSocket.OPEN) {
-            // Commit the audio buffer and trigger response
-            participant.openaiWs.send(JSON.stringify({
-              type: 'input_audio_buffer.commit'
+          if (otherParticipant) {
+            otherParticipant.ws.send(JSON.stringify({
+              type: 'PEER_MUTE_STATE',
+              peerId: userId,
+              isMuted
             }));
-            
-            // Create response to trigger translation
-            participant.openaiWs.send(JSON.stringify({
-              type: 'response.create',
-              response: {
-                modalities: ['text', 'audio'],
-                instructions: 'Translate the speech you just heard.'
+          }
+          break;
+        }
+
+        case 'LEAVE_ROOM': {
+          const { roomId, userId } = data;
+          const session = roomSessions.get(roomId);
+
+          if (session) {
+            session.participants.delete(userId);
+
+            // Notify remaining participant
+            const remainingParticipant = Array.from(session.participants.values())[0];
+            if (remainingParticipant) {
+              remainingParticipant.ws.send(JSON.stringify({
+                type: 'PEER_LEFT'
+              }));
+            }
+
+            // Clean up empty rooms after a delay
+            setTimeout(() => {
+              if (session.participants.size === 0) {
+                roomSessions.delete(roomId);
+                console.log(`🗑️ [ROOM] Cleaned up empty room ${roomId}`);
               }
-            }));
-            
-            console.log(`🎤 [VAD] Speech ended for ${userId}, triggering translation`);
+            }, 30000);
           }
-        }, 500);
+          break;
+        }
       }
-
     } catch (error) {
-      console.error('Error handling WebSocket message:', error);
-      ws.send(JSON.stringify({ type: 'error', message: 'Invalid message format' }));
+      console.error('❌ [WS] Error processing message:', error);
     }
   });
 
   ws.on('close', () => {
-    console.log('WebSocket connection closed');
-    
-    // Handle user leaving room
-    const connection = activeConnections.get(ws);
-    if (connection) {
-      const { sessionId, userId } = connection;
-      const translationSession = translationSessions.get(sessionId);
-      
-      if (translationSession) {
-        // Notify other participants that user left
-        for (const participant of translationSession.participants.values()) {
-          if (participant.socket?.readyState === WebSocket.OPEN && participant.socket !== ws) {
-            participant.socket.send(JSON.stringify({
-              type: 'USER_LEFT_ROOM',
-              sessionId,
-              userId,
-              participantCount: translationSession.participants.size - 1
-            }));
-          }
-        }
-        
-        // If this was the last participant or session becomes empty, send session_complete
-        if (translationSession.participants.size <= 1) {
-          const sessionSummary = {
-            type: 'session_complete',
-            sessionId: sessionId,
-            reason: 'participant_left',
-            endTime: Date.now(),
-            totalMessages: translationSession.messageHistory?.length || 0,
-            transcriptDownloadUrl: `/api/session/${sessionId}/transcript`,
-            recordingDownloadUrl: translationSession.recording ? `/api/session/${sessionId}/recording` : null
-          };
+    console.log('🔌 [WS] Connection closed');
 
-          // Notify remaining participants
-          for (const participant of translationSession.participants.values()) {
-            if (participant.socket?.readyState === WebSocket.OPEN) {
-              participant.socket.send(JSON.stringify(sessionSummary));
-            }
-          }
-        }
-      }
-    }
-    
-    cleanupConnection(ws);
-  });
+    if (currentRoomId && currentUserId) {
+      const session = roomSessions.get(currentRoomId);
+      if (session) {
+        session.participants.delete(currentUserId);
 
-  ws.on('error', (error) => {
-    console.error('WebSocket error:', error);
-  });
-});
-
-// NOTE: Backend OpenAI connection removed - frontend handles WebRTC directly to OpenAI
-// Backend only relays AI_AUDIO_CHUNK and messages between participants
-
-function cleanupConnection(ws) {
-  const connection = activeConnections.get(ws);
-  if (!connection) return;
-
-  const { sessionId, userId } = connection;
-  activeConnections.delete(ws);
-
-  // Clean up from translation session
-  const translationSession = translationSessions.get(sessionId);
-  if (translationSession) {
-    translationSession.removeParticipant(userId);
-    
-    // Notify remaining participant that other user left
-    if (translationSession.participants.size === 1) {
-      console.log(`⚠️ Participant ${userId} left session ${sessionId}. Notifying remaining participant.`);
-      
-      for (const participant of translationSession.participants.values()) {
-        if (participant.socket?.readyState === WebSocket.OPEN) {
-          participant.socket.send(JSON.stringify({
-            type: 'PARTICIPANT_LEFT',
-            message: 'Other participant disconnected. Waiting for them to rejoin...',
-            sessionId,
-            leftUserId: userId,
-            participantCount: 1
+        // Notify remaining participant
+        const remainingParticipant = Array.from(session.participants.values())[0];
+        if (remainingParticipant) {
+          remainingParticipant.ws.send(JSON.stringify({
+            type: 'PEER_LEFT'
           }));
         }
       }
     }
-    
-    // Remove empty translation sessions
-    if (translationSession.participants.size === 0) {
-      translationSessions.delete(sessionId);
-      console.log(`Cleaned up empty translation session: ${sessionId}`);
-    }
-  }
-  
-  console.log(`Cleaned up connection for user ${userId} in session ${sessionId}`);
-}
-
-// Home page
-app.get('/', (req, res) => {
-  res.send(`
-    <html>
-      <head><title>NeuralEcho Translation</title></head>
-      <body>
-        <h1>=��� NeuralEcho Real-time Translation Server</h1>
-        <p>G�� Server is running and ready for real-time translation!</p>
-        <p>=��� <a href="/health">Health Check</a></p>
-        <p>=��� WebSocket endpoint: ws://localhost:3001</p>
-      </body>
-    </html>
-  `);
-});
-
-// Health check endpoint
-app.get('/health', (req, res) => {
-  res.json({ 
-    status: 'ok', 
-    timestamp: new Date().toISOString(),
-    activeConnections: activeConnections.size,
-    translationSessions: translationSessions.size,
-    activeTranslations: Array.from(translationSessions.values()).map(session => ({
-      sessionId: session.sessionId,
-      participants: session.participants.size,
-      languages: Array.from(session.participants.values()).map(p => p.language)
-    })),
-    openai: {
-      apiKey: process.env.OPENAI_API_KEY ? 'configured' : 'missing'
-    }
   });
-});
 
-// Room status endpoint
-app.get('/api/session/:roomId/status', (req, res) => {
-  const { roomId } = req.params;
-  
-  if (!roomId) {
-    return res.status(400).json({ error: 'Room ID is required' });
-  }
-  
-  const session = translationSessions.get(roomId);
-  
-  if (!session) {
-    return res.status(404).json({ 
-      error: 'Room not found',
-      roomId: roomId 
-    });
-  }
-  
-  const participants = Array.from(session.participants.values()).map(p => ({
-    id: p.userId,
-    name: p.name,
-    language: p.language,
-    isConnected: p.socket?.readyState === 1 // WebSocket.OPEN
-  }));
-  
-  res.json({
-    roomId: roomId,
-    participantCount: session.participants.size,
-    maxParticipants: 2,
-    isActive: session.participants.size > 0,
-    participants: participants,
-    messageCount: session.messageHistory?.length || 0,
-    transcriptCount: session.transcriptHistory?.length || 0,
-    isRecording: session.isRecording || false
+  ws.on('error', (error) => {
+    console.error('❌ [WS] Connection error:', error);
   });
 });
 
 // Start server
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 NeuralEcho Translation Server running on http://0.0.0.0:${PORT}`);
+  console.log(`🚀 NeuralEcho Chatroom Server running on http://0.0.0.0:${PORT}`);
   console.log(`✅ Health Check: http://0.0.0.0:${PORT}/health`);
   console.log(`🔌 WebSocket Server: ws://0.0.0.0:${PORT}`);
   console.log(`🔧 Environment Check:`);
   console.log(`   - NODE_ENV: ${process.env.NODE_ENV || 'not set'}`);
   console.log(`   - OPENAI_API_KEY: ${process.env.OPENAI_API_KEY ? 'configured ✅' : 'MISSING ❌'}`);
-  console.log(`📡 Backend-managed translation architecture active`);
+  console.log(`📡 Direct WebRTC to OpenAI architecture active`);
 });
 
 export default app;

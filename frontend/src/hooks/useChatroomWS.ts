@@ -1,0 +1,256 @@
+import { useState, useEffect, useCallback, useRef } from 'react';
+
+interface TranscriptMessage {
+  id: string;
+  speakerId: string;
+  speakerName?: string;
+  originalText: string;
+  translatedText: string;
+  status: 'streaming' | 'done';
+  timestamp: number;
+  wordCount?: number;
+}
+
+interface OtherParticipant {
+  id: string;
+  name: string;
+  language: string;
+}
+
+interface UseChatroomWSProps {
+  roomId: string;
+  userId: string;
+  userName: string;
+  userLanguage: string;
+  onRoomReady?: (otherParticipant: OtherParticipant) => void;
+  onMyTranscript?: (text: string) => void;
+  onIncomingTranscript?: (text: string, speakerId: string) => void;
+  onPeerLeft?: () => void;
+  onPeerMuteState?: (peerId: string, isMuted: boolean) => void;
+}
+
+export function useChatroomWS({
+  roomId,
+  userId,
+  userName,
+  userLanguage,
+  onRoomReady,
+  onMyTranscript,
+  onIncomingTranscript,
+  onPeerLeft,
+  onPeerMuteState
+}: UseChatroomWSProps) {
+  const [status, setStatus] = useState<'connecting' | 'waiting' | 'ready' | 'disconnected'>('connecting');
+  const [otherParticipant, setOtherParticipant] = useState<OtherParticipant | null>(null);
+  const [myTranscripts, setMyTranscripts] = useState<TranscriptMessage[]>([]);
+  const [incomingTranscripts, setIncomingTranscripts] = useState<TranscriptMessage[]>([]);
+
+  const wsRef = useRef<WebSocket | null>(null);
+  const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  const connect = useCallback(() => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) return;
+
+    const ws = new WebSocket(`ws://localhost:3001`);
+    wsRef.current = ws;
+
+    ws.onopen = () => {
+      console.log('🔌 [WS] Connected to backend');
+      setStatus('connecting');
+
+      // Join the room
+      ws.send(JSON.stringify({
+        type: 'JOIN_ROOM',
+        roomId,
+        userId,
+        name: userName,
+        language: userLanguage
+      }));
+    };
+
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        console.log('📨 [WS] Received:', data.type);
+
+        switch (data.type) {
+          case 'WAITING':
+            setStatus('waiting');
+            break;
+
+          case 'ROOM_READY':
+            setStatus('ready');
+            setOtherParticipant(data.otherParticipant);
+            onRoomReady?.(data.otherParticipant);
+            break;
+
+          case 'MY_TRANSCRIPT':
+            const myTranscript: TranscriptMessage = {
+              id: `my-${Date.now()}`,
+              speakerId: userId,
+              speakerName: userName,
+              originalText: data.text,
+              translatedText: data.text,
+              status: 'done',
+              timestamp: Date.now()
+            };
+            setMyTranscripts(prev => [...prev, myTranscript]);
+            onMyTranscript?.(data.text);
+            break;
+
+          case 'INCOMING_TRANSCRIPT':
+            const incomingTranscript: TranscriptMessage = {
+              id: `incoming-${Date.now()}`,
+              speakerId: data.speakerId,
+              speakerName: data.speakerName,
+              originalText: data.text,
+              translatedText: data.text,
+              status: 'done',
+              timestamp: Date.now()
+            };
+            setIncomingTranscripts(prev => [...prev, incomingTranscript]);
+            onIncomingTranscript?.(data.text, data.speakerId);
+            break;
+
+          case 'PEER_LEFT':
+            setStatus('disconnected');
+            setOtherParticipant(null);
+            onPeerLeft?.();
+            break;
+
+          case 'PEER_TRANSCRIPT_DELTA':
+            // Upsert by sentenceId — creates on first delta, updates on subsequent
+            setIncomingTranscripts(prev => {
+              const exists = prev.find(t => t.id === data.sentenceId);
+              if (!exists) {
+                return [...prev, {
+                  id: data.sentenceId,
+                  speakerId: data.speakerId,
+                  speakerName: data.speakerName,
+                  originalText: data.originalText,
+                  translatedText: data.translatedText,
+                  status: 'streaming',
+                  timestamp: data.timestamp,
+                  wordCount: data.wordCount
+                }];
+              }
+              return prev.map(t =>
+                t.id === data.sentenceId
+                  ? { ...t,
+                      originalText: data.originalText,
+                      translatedText: data.translatedText,
+                      wordCount: data.wordCount }
+                  : t
+              );
+            });
+            break;
+
+          case 'PEER_TRANSCRIPT_SENTENCE_DONE':
+            setIncomingTranscripts(prev =>
+              prev.map(t =>
+                t.id === data.sentenceId
+                  ? { ...t, status: 'done' }
+                  : t
+              )
+            );
+            break;
+
+          case 'ERROR':
+            console.error('❌ [WS] Error:', data.message);
+            setStatus('disconnected');
+            break;
+        }
+      } catch (error) {
+        console.error('❌ [WS] Error parsing message:', error);
+      }
+    };
+
+    ws.onclose = () => {
+      console.log('🔌 [WS] Disconnected');
+      setStatus('disconnected');
+      wsRef.current = null;
+
+      // Auto-reconnect after 3 seconds
+      reconnectTimeoutRef.current = setTimeout(() => {
+        connect();
+      }, 3000);
+    };
+
+    ws.onerror = (error) => {
+      console.error('❌ [WS] Error:', error);
+    };
+  }, [roomId, userId, userName, userLanguage, onRoomReady, onMyTranscript, onIncomingTranscript, onPeerLeft, onPeerMuteState]);
+
+  const sendTranscript = useCallback((data: string | object, direction: 'MY' | 'INCOMING' | 'DELTA' | 'SENTENCE_DONE') => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      if (direction === 'DELTA' && typeof data === 'object') {
+        wsRef.current.send(JSON.stringify({
+          type: 'TRANSCRIPT_DELTA',
+          roomId,
+          userId,
+          ...data
+        }));
+      } else if (direction === 'SENTENCE_DONE') {
+        wsRef.current.send(JSON.stringify({
+          type: 'SENTENCE_DONE',
+          roomId,
+          userId,
+          sentenceId: (data as any).sentenceId
+        }));
+      } else {
+        // Legacy format for backward compatibility
+        wsRef.current.send(JSON.stringify({
+          type: 'TRANSCRIPT',
+          roomId,
+          userId,
+          text: data,
+          direction
+        }));
+      }
+    }
+  }, [roomId, userId]);
+
+  const sendMuteState = useCallback((isMuted: boolean) => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({
+        type: 'MUTE_STATE',
+        roomId,
+        userId,
+        isMuted
+      }));
+    }
+  }, [roomId, userId]);
+
+  const leaveRoom = useCallback(() => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({
+        type: 'LEAVE_ROOM',
+        roomId,
+        userId
+      }));
+    }
+  }, [roomId, userId]);
+
+  useEffect(() => {
+    connect();
+
+    return () => {
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+      }
+      if (wsRef.current) {
+        wsRef.current.close();
+      }
+    };
+  }, [connect]);
+
+  return {
+    status,
+    otherParticipant,
+    myTranscripts,
+    incomingTranscripts,
+    sendTranscript,
+    sendMuteState,
+    leaveRoom
+  };
+}

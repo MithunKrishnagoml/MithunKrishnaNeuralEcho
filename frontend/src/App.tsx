@@ -11,25 +11,29 @@ import PhoneTranslation from "./pages/PhoneTranslation";
 import Chatroom from "./pages/Chatroom";
 import JoinRoom from "./pages/JoinRoom";
 import DocumentTranslationPage from "./pages/DocumentTranslation";
-import { WebSocketDebug } from "./components/WebSocketDebug";
+import { RoomInterface } from "./components/RoomInterface";
 
 const queryClient = new QueryClient();
 
 function AppRoutes() {
   return (
-    <AppProvider>
-      <Routes>
-        <Route path="/" element={<Index />} />
-        <Route path="/login" element={<Navigate to="/" replace />} />
-        <Route path="/admin" element={<AdminPage />} />
-        <Route path="/phone" element={<PhoneTranslation />} />
-        <Route path="/chatroom" element={<Chatroom />} />
-        <Route path="/documents" element={<DocumentTranslationPage />} />
-        <Route path="/join/:roomId" element={<JoinRoom />} />
-        <Route path="/debug" element={<div className="p-6"><WebSocketDebug /></div>} />
-        <Route path="*" element={<NotFound />} />
-      </Routes>
-    </AppProvider>
+    <Routes>
+      {/* Single-user routes with AppProvider (WebRTC/OpenAI) */}
+      <Route path="/" element={<AppProvider><Index /></AppProvider>} />
+      <Route path="/login" element={<Navigate to="/" replace />} />
+      <Route path="/admin" element={<AppProvider><AdminPage /></AppProvider>} />
+      <Route path="/phone" element={<AppProvider><PhoneTranslation /></AppProvider>} />
+      <Route path="/documents" element={<AppProvider><DocumentTranslationPage /></AppProvider>} />
+      
+      {/* Chatroom routes WITHOUT AppProvider (WebSocket-only, no WebRTC) */}
+      <Route path="/chatroom" element={<Chatroom />} />
+      <Route path="/join/:roomId" element={<JoinRoom />} />
+      <Route path="/room/:roomId" element={<RoomInterface />} />
+      
+      {/* Debug and fallback routes */}
+      <Route path="/debug" element={<div className="p-6"><WebSocketDebug /></div>} />
+      <Route path="*" element={<NotFound />} />
+    </Routes>
   );
 }
 
