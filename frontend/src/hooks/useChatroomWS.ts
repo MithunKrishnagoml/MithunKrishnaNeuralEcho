@@ -28,6 +28,7 @@ interface UseChatroomWSProps {
   onIncomingTranscript?: (text: string, speakerId: string) => void;
   onPeerLeft?: () => void;
   onPeerMuteState?: (peerId: string, isMuted: boolean) => void;
+  onPeerAudioChunk?: (chunk: { audio: string; timestamp: number; peerId: string }) => void;
 }
 
 export function useChatroomWS({
@@ -39,7 +40,8 @@ export function useChatroomWS({
   onMyTranscript,
   onIncomingTranscript,
   onPeerLeft,
-  onPeerMuteState
+  onPeerMuteState,
+  onPeerAudioChunk
 }: UseChatroomWSProps) {
   const [status, setStatus] = useState<'connecting' | 'waiting' | 'ready' | 'disconnected'>('connecting');
   const [otherParticipant, setOtherParticipant] = useState<OtherParticipant | null>(null);
@@ -104,6 +106,18 @@ export function useChatroomWS({
         roomId,
         userId,
         isMuted
+      }));
+    }
+  }, [roomId, userId]);
+
+  const sendAudioChunk = useCallback((audio: string, timestamp: number) => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({
+        type: 'AUDIO_CHUNK',
+        roomId,
+        userId,
+        audio,
+        timestamp
       }));
     }
   }, [roomId, userId]);
@@ -256,6 +270,15 @@ export function useChatroomWS({
               );
               break;
 
+            case 'PEER_AUDIO_CHUNK':
+              // Pass audio chunk to parent component for playback
+              onPeerAudioChunk?.({
+                audio: data.audio,
+                timestamp: data.timestamp,
+                peerId: data.peerId
+              });
+              break;
+
             case 'ERROR':
               console.error('❌ [WS] Error:', data.message);
               setStatus('disconnected');
@@ -324,6 +347,7 @@ export function useChatroomWS({
     incomingTranscripts,
     sendTranscript,
     sendMuteState,
+    sendAudioChunk,
     leaveRoom
   };
 }

@@ -10,6 +10,7 @@ interface UseOpenAIRealtimeProps {
   onVoiceActivityStart: () => void;
   onVoiceActivityStop: () => void;
   sendTranscriptToBackend: (text: string | object, direction: 'MY' | 'INCOMING' | 'DELTA' | 'SENTENCE_DONE') => void;
+  onTranslatedAudioChunk?: (chunk: { audio: string; timestamp: number }) => void;
 }
 
 type Register = "formal" | "casual" | "technical" | "emotional";
@@ -174,6 +175,8 @@ export function useOpenAIRealtime({
   const micTrackRef = useRef<MediaStreamTrack | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const accumulatedTranscriptRef = useRef('');
+  const audioOutputCtxRef = useRef<AudioContext | null>(null);
+  const audioProcessorRef = useRef<AudioWorkletNode | null>(null);
 
   // Conversation context for coherent translations
   const conversationContextRef = useRef<ConversationContext>({
@@ -197,6 +200,12 @@ export function useOpenAIRealtime({
   const lastCommitTimeRef = useRef(0);
   const isMutedRef = useRef(true);
   const rafRef = useRef<number | null>(null);
+  const onTranslatedAudioChunkRef = useRef<((chunk: { audio: string; timestamp: number }) => void) | undefined>();
+
+  // Update the callback ref when it changes
+  useEffect(() => {
+    onTranslatedAudioChunkRef.current = onTranslatedAudioChunk;
+  }, [onTranslatedAudioChunk]);
 
   const startMic = useCallback(async () => {
     try {
@@ -212,11 +221,47 @@ export function useOpenAIRealtime({
       const pc = new RTCPeerConnection();
       pcRef.current = pc;
 
-      // Step C: Set up remote audio
-      const audioEl = new Audio();
-      audioEl.autoplay = true;
+      // Step C: Set up remote audio with capture for peer transmission
       pc.ontrack = (e) => {
+        console.log('🔊 [OpenAI] Audio track received');
+        
+        // Create audio context for capturing output
+        const outputCtx = new AudioContext({ sampleRate: 24000 });
+        audioOutputCtxRef.current = outputCtx;
+        
+        // Create audio element for local playback
+        const audioEl = new Audio();
+        audioEl.autoplay = true;
         audioEl.srcObject = e.streams[0];
+        
+        // Also pipe to capture processor
+        const source = outputCtx.createMediaStreamSource(e.streams[0]);
+        const scriptProcessor = outputCtx.createScriptProcessor(4096, 1, 1);
+        
+        scriptProcessor.onaudioprocess = (event) => {
+          const inputData = event.inputBuffer.getChannelData(0);
+          
+          // Convert Float32 → PCM16 → base64
+          const int16 = new Int16Array(inputData.length);
+          for (let i = 0; i < inputData.length; i++) {
+            int16[i] = Math.max(-32768, Math.min(32767, inputData[i] * 32767));
+          }
+          
+          const base64 = btoa(
+            String.fromCharCode(...new Uint8Array(int16.buffer))
+          );
+          
+          // Send audio chunk to other participant via callback
+          onTranslatedAudioChunkRef.current?.({
+            audio: base64,
+            timestamp: Date.now()
+          });
+        };
+        
+        source.connect(scriptProcessor);
+        scriptProcessor.connect(outputCtx.destination);
+        
+        audioProcessorRef.current = scriptProcessor as any;
       };
 
       // Step D: Capture mic with preprocessing
@@ -527,7 +572,7 @@ export function useOpenAIRealtime({
       console.error('❌ [OpenAI] Setup failed:', error);
       setStatus('error');
     }
-  }, [myLanguage, targetLanguage, onMyTranscript, onIncomingTranscriptDelta, onIncomingTranscriptDone, onVoiceActivityStart, onVoiceActivityStop, sendTranscriptToBackend]);
+  }, [myLanguage, targetLanguage, onMyTranscript, onIncomingTranscriptDelta, onIncomingTranscriptDone, onVoiceActivityStart, onVoiceActivityStop, sendTranscriptToBackend, onTranslatedAudioChunk]);
 
   const mute = useCallback(() => {
     if (micTrackRef.current) {
@@ -560,6 +605,14 @@ export function useOpenAIRealtime({
     if (audioCtxRef.current) {
       audioCtxRef.current.close();
       audioCtxRef.current = null;
+    }
+    if (audioProcessorRef.current) {
+      audioProcessorRef.current.disconnect();
+      audioProcessorRef.current = null;
+    }
+    if (audioOutputCtxRef.current) {
+      audioOutputCtxRef.current.close();
+      audioOutputCtxRef.current = null;
     }
     setStatus('disconnected');
   }, []);

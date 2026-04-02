@@ -81,6 +81,9 @@ export function RoomInterface() {
   const userName = searchParams.get('name') || 'User';
   const userLanguage = searchParams.get('language') || 'en';
   const [incomingTranscriptAccumulator, setIncomingTranscriptAccumulator] = useState('');
+  const audioQueueRef = useRef<{ audio: string; timestamp: number }[]>([]);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const isPlayingRef = useRef(false);
 
   const {
     status: wsStatus,
@@ -89,6 +92,7 @@ export function RoomInterface() {
     incomingTranscripts,
     sendTranscript,
     sendMuteState,
+    sendAudioChunk,
     leaveRoom
   } = useChatroomWS({
     roomId: roomId!,
@@ -109,8 +113,76 @@ export function RoomInterface() {
     },
     onPeerMuteState: (peerId, isMuted) => {
       console.log('Peer mute state:', peerId, isMuted);
+    },
+    onPeerAudioChunk: (chunk) => {
+      // Queue audio chunk for playback
+      audioQueueRef.current.push(chunk);
+      console.log('🎵 [Audio] Queued chunk from peer, queue size:', audioQueueRef.current.length);
+      
+      // Start playback if not already playing
+      if (!isPlayingRef.current) {
+        playNextAudioChunk();
+      }
     }
   });
+
+  // Function to play audio chunks sequentially
+  const playNextAudioChunk = useCallback(async () => {
+    if (audioQueueRef.current.length === 0) {
+      isPlayingRef.current = false;
+      return;
+    }
+
+    isPlayingRef.current = true;
+    const chunk = audioQueueRef.current.shift();
+    if (!chunk) {
+      isPlayingRef.current = false;
+      return;
+    }
+
+    try {
+      // Initialize audio context if needed
+      if (!audioContextRef.current) {
+        audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+      }
+
+      const ctx = audioContextRef.current;
+      
+      // Decode base64 to PCM16
+      const binaryString = atob(chunk.audio);
+      const bytes = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+
+      // Convert PCM16 to Float32
+      const int16Array = new Int16Array(bytes.buffer);
+      const float32Array = new Float32Array(int16Array.length);
+      for (let i = 0; i < int16Array.length; i++) {
+        float32Array[i] = int16Array[i] / 32768.0;
+      }
+
+      // Create audio buffer
+      const audioBuffer = ctx.createBuffer(1, float32Array.length, 24000);
+      audioBuffer.getChannelData(0).set(float32Array);
+
+      // Play buffer
+      const source = ctx.createBufferSource();
+      source.buffer = audioBuffer;
+      source.connect(ctx.destination);
+      source.onended = () => {
+        // Play next chunk after this one finishes
+        playNextAudioChunk();
+      };
+      source.start(0);
+
+      console.log('🎵 [Audio] Playing chunk, queue remaining:', audioQueueRef.current.length);
+    } catch (error) {
+      console.error('❌ [Audio] Error playing chunk:', error);
+      // Try next chunk
+      playNextAudioChunk();
+    }
+  }, []);
 
   const {
     status: openaiStatus,
@@ -139,7 +211,12 @@ export function RoomInterface() {
     onVoiceActivityStop: () => {
       console.log('Voice activity stopped');
     },
-    sendTranscriptToBackend: sendTranscript
+    sendTranscriptToBackend: sendTranscript,
+    onTranslatedAudioChunk: (chunk) => {
+      // Send translated audio to peer via WebSocket
+      console.log('🎵 [Audio] Got translated audio chunk, sending to peer');
+      sendAudioChunk(chunk.audio, chunk.timestamp);
+    }
   });
 
   const handleMuteToggle = useCallback(() => {

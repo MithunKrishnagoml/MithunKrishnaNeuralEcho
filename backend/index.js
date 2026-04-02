@@ -374,6 +374,28 @@ wss.on('connection', (ws, req) => {
           break;
         }
 
+        case 'AUDIO_CHUNK': {
+          const { roomId, userId, audio, timestamp } = data;
+          const session = roomSessions.get(roomId);
+
+          if (!session) return;
+
+          // Find the other participant and send them the audio chunk
+          const otherParticipant = Array.from(session.participants.values())
+            .find(p => p.userId !== userId);
+
+          if (otherParticipant) {
+            console.log(`🎵 [AUDIO] Relaying audio chunk from ${userId} to peer (timestamp: ${timestamp})`);
+            otherParticipant.ws.send(JSON.stringify({
+              type: 'PEER_AUDIO_CHUNK',
+              peerId: userId,
+              audio,
+              timestamp
+            }));
+          }
+          break;
+        }
+
         case 'LEAVE_ROOM': {
           const { roomId, userId } = data;
           const session = roomSessions.get(roomId);
