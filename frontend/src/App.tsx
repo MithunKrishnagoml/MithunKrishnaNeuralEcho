@@ -28,6 +28,7 @@ function AppRoutes() {
       
       {/* Chatroom routes WITHOUT AppProvider (WebSocket-only, no WebRTC) */}
       <Route path="/chatroom" element={<Chatroom />} />
+      <Route path="/chatroom/join/:roomId" element={<JoinRoom />} />
       <Route path="/join/:roomId" element={<JoinRoom />} />
       <Route path="/room/:roomId" element={<RoomInterface />} />
       

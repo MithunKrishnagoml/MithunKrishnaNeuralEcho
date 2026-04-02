@@ -55,7 +55,7 @@ const Chatroom = () => {
     return id;
   };
 
-  const handleCreateRoom = useCallback(async (data: CreateRoomData) => {
+  const handleCreateRoom = useCallback(async (data: CreateRoomData): Promise<{ roomId: string; joinUrl: string }> => {
     setIsLoading(true);
 
     try {
@@ -64,7 +64,10 @@ const Chatroom = () => {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({})
+        body: JSON.stringify({
+          name: data.name,
+          language: data.language
+        })
       });
 
       if (!response.ok) {
@@ -72,14 +75,14 @@ const Chatroom = () => {
       }
 
       const result = await response.json();
-      const roomId = result.roomId;
 
-      // Navigate to room
-      window.location.href = `/room/${roomId}?name=${encodeURIComponent(data.name)}&language=${encodeURIComponent(data.language)}`;
+      // Don't navigate immediately - let the component handle the UI
+      return result;
 
     } catch (error) {
       console.error('Error creating room:', error);
       toast.error('Failed to create room');
+      throw error;
     } finally {
       setIsLoading(false);
     }
@@ -94,7 +97,10 @@ const Chatroom = () => {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({})
+        body: JSON.stringify({
+          name: data.name,
+          language: data.language
+        })
       });
 
       if (!response.ok) {

@@ -5,11 +5,13 @@ import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Users, Plus, LogIn, Globe, Mic } from 'lucide-react';
+import { Users, Plus, LogIn, Globe, Mic, Copy, Check, QrCode } from 'lucide-react';
 import { CreateRoomData, JoinRoomData } from '@/types/chatroom';
+import { QRCodeSVG } from 'qrcode.react';
+import { toast } from 'sonner';
 
 interface RoomJoinCreateProps {
-  onCreateRoom: (data: CreateRoomData) => void;
+  onCreateRoom: (data: CreateRoomData) => Promise<{ roomId: string; joinUrl: string }>;
   onJoinRoom: (data: JoinRoomData) => void;
   isLoading?: boolean;
   prefilledRoomId?: string;
@@ -28,24 +30,46 @@ export function RoomJoinCreate({ onCreateRoom, onJoinRoom, isLoading = false, pr
     roomId: prefilledRoomId
   });
 
-  const handleCreateRoom = () => {
+  const [createdRoom, setCreatedRoom] = useState<{ roomId: string; joinUrl: string } | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  const handleCreateRoom = async () => {
     if (createData.name.trim()) {
-      onCreateRoom(createData);
-      // Notify about language selection
-      if (onLanguageSelected) {
-        onLanguageSelected(createData.language, '');
+      try {
+        const result = await onCreateRoom(createData);
+        setCreatedRoom(result);
+        // Notify about language selection
+        if (onLanguageSelected) {
+          onLanguageSelected(createData.language, result.roomId);
+        }
+      } catch (error) {
+        console.error('Failed to create room:', error);
+        toast.error('Failed to create room');
       }
     }
   };
 
-  const handleJoinRoom = () => {
-    if (joinData.name.trim() && joinData.roomId.trim()) {
-      onJoinRoom(joinData);
-      // Notify about language selection
-      if (onLanguageSelected) {
-        onLanguageSelected(joinData.language, joinData.roomId);
+  const handleCopyLink = async () => {
+    if (createdRoom) {
+      try {
+        await navigator.clipboard.writeText(createdRoom.joinUrl);
+        setCopied(true);
+        toast.success('Invite link copied to clipboard!');
+        setTimeout(() => setCopied(false), 2000);
+      } catch (error) {
+        toast.error('Failed to copy link');
       }
     }
+  };
+
+  const handleEnterRoom = () => {
+    if (createdRoom) {
+      window.location.href = `/room/${createdRoom.roomId}?name=${encodeURIComponent(createData.name)}&language=${encodeURIComponent(createData.language)}`;
+    }
+  };
+
+  const handleBackToCreate = () => {
+    setCreatedRoom(null);
   };
 
   const generateRoomId = () => {
@@ -68,7 +92,76 @@ export function RoomJoinCreate({ onCreateRoom, onJoinRoom, isLoading = false, pr
         </div>
 
         {/* Room Actions */}
-        <Tabs defaultValue={prefilledRoomId ? "join" : "create"} className="w-full">
+        {createdRoom ? (
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <QrCode className="w-5 h-5" />
+                Room Created Successfully!
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <div className="text-center">
+                <p className="text-muted-foreground mb-4">
+                  Share this invite link or QR code with someone to start your conversation.
+                </p>
+                
+                {/* QR Code */}
+                <div className="flex justify-center mb-4">
+                  <div className="p-4 bg-white rounded-lg">
+                    <QRCodeSVG value={createdRoom.joinUrl} size={200} />
+                  </div>
+                </div>
+
+                {/* Room Info */}
+                <div className="space-y-2 text-sm">
+                  <div className="font-medium">Room ID: {createdRoom.roomId}</div>
+                  <div className="text-muted-foreground">
+                    Created by: {createData.name} ({createData.language === 'en-US' ? 'English' : 'Français'})
+                  </div>
+                </div>
+
+                {/* Invite Link */}
+                <div className="space-y-2">
+                  <Label>Invite Link</Label>
+                  <div className="flex gap-2">
+                    <Input
+                      value={createdRoom.joinUrl}
+                      readOnly
+                      className="flex-1"
+                    />
+                    <Button
+                      onClick={handleCopyLink}
+                      variant="outline"
+                      size="sm"
+                    >
+                      {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                    </Button>
+                  </div>
+                </div>
+
+                {/* Action Buttons */}
+                <div className="flex gap-2 pt-4">
+                  <Button
+                    onClick={handleBackToCreate}
+                    variant="outline"
+                    className="flex-1"
+                  >
+                    Create Another Room
+                  </Button>
+                  <Button
+                    onClick={handleEnterRoom}
+                    className="flex-1"
+                  >
+                    <Users className="w-4 h-4 mr-2" />
+                    Enter Room
+                  </Button>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        ) : (
+          <Tabs defaultValue={prefilledRoomId ? "join" : "create"} className="w-full">
           <TabsList className="grid w-full grid-cols-2">
             <TabsTrigger value="create" className="flex items-center gap-2">
               <Plus className="w-4 h-4" />
@@ -221,6 +314,7 @@ export function RoomJoinCreate({ onCreateRoom, onJoinRoom, isLoading = false, pr
             </Card>
           </TabsContent>
         </Tabs>
+        )}
 
         {/* Features Info */}
         <Card className="bg-muted/50">

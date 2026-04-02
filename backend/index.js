@@ -63,23 +63,48 @@ function safeSend(ws, message) {
 // Store active room sessions
 const roomSessions = new Map();
 
+// Room expiry cleanup (10 minutes)
+setInterval(() => {
+  const now = Date.now();
+  const expiryTime = 10 * 60 * 1000; // 10 minutes
+
+  for (const [roomId, session] of roomSessions.entries()) {
+    if (now - session.createdAt > expiryTime) {
+      roomSessions.delete(roomId);
+      console.log(`🏠 [ROOM] Expired room ${roomId} after 10 minutes`);
+    }
+  }
+}, 60 * 1000); // Check every minute
+
 // API Routes
 
 // Create room
 app.post('/api/room/create', (req, res) => {
-  const roomId = nanoid(8);
+  const { name, language } = req.body;
+  if (!name || !language) {
+    return res.status(400).json({ error: 'Name and language are required' });
+  }
+
+  const roomId = nanoid(10);
   const session = new RoomSession(roomId);
   roomSessions.set(roomId, session);
 
-  const joinUrl = `${req.protocol}://${req.get('host')}/room/${roomId}`;
+  const frontendUrl = process.env.FRONTEND_URL || `${req.protocol}://${req.get('host')}`;
+  const joinUrl = `${frontendUrl}/chatroom/join/${roomId}`;
 
-  console.log(`🏠 [ROOM] Created room ${roomId}`);
+  console.log(`🏠 [ROOM] Created room ${roomId} for ${name} (${language})`);
   res.json({ roomId, joinUrl });
 });
 
 // Join room
 app.post('/api/room/:roomId/join', (req, res) => {
   const { roomId } = req.params;
+  const { name, language } = req.body;
+
+  if (!name || !language) {
+    return res.status(400).json({ error: 'Name and language are required' });
+  }
+
   const session = roomSessions.get(roomId);
 
   if (!session) {
@@ -98,7 +123,46 @@ app.post('/api/room/:roomId/join', (req, res) => {
     return res.status(400).json({ error: 'Room is full' });
   }
 
+  console.log(`🏠 [ROOM] ${name} (${language}) joining room ${roomId}`);
   res.json({ success: true, participantCount: liveParticipants });
+});
+
+// Get room status
+app.get('/api/room/:roomId/status', (req, res) => {
+  const { roomId } = req.params;
+  const session = roomSessions.get(roomId);
+
+  if (!session) {
+    return res.json({ exists: false });
+  }
+
+  // Get creator info (first participant)
+  const participants = Array.from(session.participants.values());
+  const creator = participants[0];
+
+  if (!creator) {
+    return res.json({ exists: false });
+  }
+
+  res.json({
+    exists: true,
+    participantCount: participants.length,
+    creatorName: creator.name,
+    creatorLanguage: creator.language
+  });
+});
+
+// Cancel room
+app.post('/api/room/:roomId/cancel', (req, res) => {
+  const { roomId } = req.params;
+  const session = roomSessions.get(roomId);
+
+  if (session) {
+    roomSessions.delete(roomId);
+    console.log(`🏠 [ROOM] Cancelled room ${roomId}`);
+  }
+
+  res.json({ success: true });
 });
 
 // Get OpenAI ephemeral token

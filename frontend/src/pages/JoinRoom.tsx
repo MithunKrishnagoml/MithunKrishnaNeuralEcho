@@ -59,11 +59,11 @@ const JoinRoom = () => {
     setIsJoining(true);
 
     try {
-      // Verify session exists and is not full
-      const statusRes = await fetch(`${BACKEND_URL}/api/session/${roomId}/status`);
+      // Check room status
+      const statusRes = await fetch(`${BACKEND_URL}/api/room/${roomId}/status`);
 
       if (statusRes.status === 404) {
-        setError('This session does not exist or has already ended.');
+        setError('This room does not exist or has already ended.');
         return;
       }
 
@@ -79,16 +79,16 @@ const JoinRoom = () => {
         return;
       }
 
-      // Join the session on the backend
-      const joinRes = await fetch(`${BACKEND_URL}/api/session/join`, {
+      // Join the room
+      const joinRes = await fetch(`${BACKEND_URL}/api/room/${roomId}/join`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId: roomId, language }),
+        body: JSON.stringify({ name: name.trim(), language }),
       });
 
       if (!joinRes.ok) {
         const err = await joinRes.json().catch(() => ({}));
-        setError(err.error || 'Failed to join the session. Please try again.');
+        setError(err.error || 'Failed to join the room. Please try again.');
         return;
       }
 
