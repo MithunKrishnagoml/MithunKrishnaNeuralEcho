@@ -12,6 +12,7 @@ import Chatroom from "./pages/Chatroom";
 import JoinRoom from "./pages/JoinRoom";
 import DocumentTranslationPage from "./pages/DocumentTranslation";
 import { RoomInterface } from "./components/RoomInterface";
+import { WebSocketDebug } from "./components/WebSocketDebug";
 
 const queryClient = new QueryClient();
 
