@@ -685,6 +685,7 @@ wss.on('connection', (ws, req) => {
         console.log('📥 [BACKEND] User ID:', userId);
         console.log('📥 [BACKEND] User Name:', name);
         console.log('📥 [BACKEND] Language:', language);
+        console.log('📥 [BACKEND] WebSocket readyState:', ws.readyState);
         console.log('═══════════════════════════════════════════════════════');
         
         const translationSession = translationSessions.get(sessionId);
