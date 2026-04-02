@@ -248,8 +248,15 @@ export function RoomInterface() {
                           wsStatus === 'waiting' ? 'waiting' : 'disconnected';
 
   return (
-    <div className="min-h-screen bg-background p-4">
-      <div className="max-w-6xl mx-auto">
+    <div className="min-h-screen bg-background p-4 relative">
+      {/* Background Watermark */}
+      <div className="fixed inset-0 flex items-center justify-center pointer-events-none z-0">
+        <span className="text-8xl font-bold text-muted-foreground/10 select-none whitespace-nowrap">
+          GoML - NeuralEcho
+        </span>
+      </div>
+
+      <div className="max-w-6xl mx-auto relative z-10">
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
           <div className="flex items-center gap-4">

@@ -156,7 +156,8 @@ export function useOpenAIRealtime({
   onIncomingTranscriptDone,
   onVoiceActivityStart,
   onVoiceActivityStop,
-  sendTranscriptToBackend
+  sendTranscriptToBackend,
+  onTranslatedAudioChunk
 }: UseOpenAIRealtimeProps) {
   const [status, setStatus] = useState<'disconnected' | 'connecting' | 'connected' | 'error'>('disconnected');
   const [isMuted, setIsMuted] = useState(true); // Start muted
