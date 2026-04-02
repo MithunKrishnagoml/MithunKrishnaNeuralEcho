@@ -89,10 +89,12 @@ app.post('/api/room/create', (req, res) => {
   const session = new RoomSession(roomId);
   roomSessions.set(roomId, session);
 
-  const frontendUrl = process.env.FRONTEND_URL || `${req.protocol}://${req.get('host')}`;
+  // Use FRONTEND_URL from env, default to Vercel deployment (NOT the backend)
+  const frontendUrl = process.env.FRONTEND_URL || 'https://neuralecho1.vercel.app';
   const joinUrl = `${frontendUrl}/chatroom/join/${roomId}`;
 
   console.log(`🏠 [ROOM] Created room ${roomId} for ${name} (${language})`);
+  console.log(`🔗 [ROOM] Join URL: ${joinUrl}`);
   res.json({ roomId, joinUrl });
 });
 
