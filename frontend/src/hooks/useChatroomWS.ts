@@ -50,9 +50,32 @@ export function useChatroomWS({
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const deltaBufferRef = useRef<any>(null);
   const rafRef = useRef<number | null>(null);
+  const destroyedRef = useRef<boolean>(false);
+  
+  // Use refs to avoid re-creating connect callback on every prop change
+  const userNameRef = useRef(userName);
+  const userLanguageRef = useRef(userLanguage);
+  
+  // Update refs when props change (they won't trigger useEffect re-run)
+  useEffect(() => {
+    userNameRef.current = userName;
+  }, [userName]);
+  
+  useEffect(() => {
+    userLanguageRef.current = userLanguage;
+  }, [userLanguage]);
 
   const connect = useCallback(() => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) return;
+    // Guard: don't reconnect if component was unmounted
+    if (destroyedRef.current) {
+      console.log('🔌 [WS] Ignoring connect() after unmount');
+      return;
+    }
+
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      console.log('🔌 [WS] Already connected, skipping');
+      return;
+    }
 
     // Use backend WebSocket URL from environment
     console.log('🔌 [WS] Connecting to:', WS_URL);
@@ -63,13 +86,13 @@ export function useChatroomWS({
       console.log('🔌 [WS] Connected to backend');
       setStatus('connecting');
 
-      // Join the room
+      // Send JOIN_ROOM immediately after connect
       ws.send(JSON.stringify({
         type: 'JOIN_ROOM',
         roomId,
         userId,
-        name: userName,
-        language: userLanguage
+        name: userNameRef.current,
+        language: userLanguageRef.current
       }));
     };
 
@@ -93,7 +116,7 @@ export function useChatroomWS({
             const myTranscript: TranscriptMessage = {
               id: `my-${Date.now()}`,
               speakerId: userId,
-              speakerName: userName,
+              speakerName: userNameRef.current,
               originalText: data.text,
               translatedText: data.text,
               status: 'done',
@@ -188,10 +211,14 @@ export function useChatroomWS({
       setStatus('disconnected');
       wsRef.current = null;
 
-      // Auto-reconnect after 3 seconds
-      reconnectTimeoutRef.current = setTimeout(() => {
-        connect();
-      }, 3000);
+      // Auto-reconnect after 3 seconds, but guard against unmounted components
+      if (!destroyedRef.current) {
+        reconnectTimeoutRef.current = setTimeout(() => {
+          if (!destroyedRef.current) {
+            connect();
+          }
+        }, 3000);
+      }
     };
 
     ws.onerror = (event: Event) => {
@@ -199,7 +226,7 @@ export function useChatroomWS({
       console.error('❌ [WS] WebSocket error:', wsEvent);
       setStatus('disconnected');
     };
-  }, [roomId, userId, userName, userLanguage, onRoomReady, onMyTranscript, onIncomingTranscript, onPeerLeft, onPeerMuteState]);
+  }, [roomId, userId, onRoomReady, onMyTranscript, onIncomingTranscript, onPeerLeft, onPeerMuteState]);
 
   const sendTranscript = useCallback((data: string | object, direction: 'MY' | 'INCOMING' | 'DELTA' | 'SENTENCE_DONE') => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
@@ -252,17 +279,37 @@ export function useChatroomWS({
   }, [roomId, userId]);
 
   useEffect(() => {
+    // Reset destroyed flag when component mounts
+    destroyedRef.current = false;
+
+    // Initiate connection
     connect();
 
+    // Cleanup: runs on unmount or when dependencies change
     return () => {
+      destroyedRef.current = true;  // ← Stop reconnect loop
+
+      // Cancel any pending reconnect
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = null;
       }
+
+      // Cancel any pending rAF
+      if (rafRef.current) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
+
+      // Close the WebSocket
       if (wsRef.current) {
         wsRef.current.close();
+        wsRef.current = null;
       }
+
+      console.log('🔌 [WS] Component unmounted, cleanup complete');
     };
-  }, [connect]);
+  }, [roomId, userId, connect]);
 
   return {
     status,
