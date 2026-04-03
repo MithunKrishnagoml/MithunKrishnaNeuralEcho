@@ -229,13 +229,26 @@ export class StreamingAudioPlayer {
   }
 
   /**
-   * Handle out-of-order chunk reordering
+   * Handle out-of-order chunk reordering with resilience to resets
    */
   private async handleReordering(chunk: AudioChunk): Promise<void> {
     const seq = chunk.sequenceNumber!;
 
-    // Reset sequence tracking on new response
+    // Detect sequence reset (new response starting)
     if (this.currentResponseId !== chunk.responseId) {
+      console.log(`🔢 Sequence reset detected — restarting sequence tracking (new response: ${chunk.responseId})`);
+      this.reorderBuffer.clear();
+      this.nextExpectedSequence = 0;
+      this.currentResponseId = chunk.responseId;
+      if (this.reorderTimeout) {
+        clearTimeout(this.reorderTimeout);
+        this.reorderTimeout = null;
+      }
+    }
+
+    // If chunk is way behind (>5 behind expected), it might be a reset we missed
+    if (seq === 0 && this.nextExpectedSequence > 5) {
+      console.log(`🔢 Sequence reset detected — restarting sequence tracking (seq=0 after ${this.nextExpectedSequence})`);
       this.reorderBuffer.clear();
       this.nextExpectedSequence = 0;
       if (this.reorderTimeout) {
@@ -279,9 +292,16 @@ export class StreamingAudioPlayer {
         }, 40);
       }
     } else {
-      // Old chunk - skip it
-      if (this.options.debug) {
-        console.warn(`[StreamingAudioPlayer] Skipping old chunk #${seq} (expected #${this.nextExpectedSequence})`);
+      // Old chunk - only skip if it's more than 5 behind (prevents single reset from silencing session)
+      const gap = this.nextExpectedSequence - seq;
+      if (gap > 5) {
+        if (this.options.debug) {
+          console.warn(`[StreamingAudioPlayer] Skipping old chunk #${seq} (expected #${this.nextExpectedSequence}, gap: ${gap})`);
+        }
+      } else {
+        // Close enough - accept it anyway to be resilient
+        console.log(`[StreamingAudioPlayer] Accepting slightly old chunk #${seq} (expected #${this.nextExpectedSequence}, gap: ${gap})`);
+        await this.bufferChunk(chunk);
       }
     }
   }

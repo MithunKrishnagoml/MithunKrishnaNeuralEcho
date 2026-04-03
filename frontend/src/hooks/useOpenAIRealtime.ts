@@ -10,7 +10,7 @@ interface UseOpenAIRealtimeProps {
   onVoiceActivityStart: () => void;
   onVoiceActivityStop: () => void;
   sendTranscriptToBackend: (text: string | object, direction: 'MY' | 'INCOMING' | 'DELTA' | 'SENTENCE_DONE') => void;
-  onTranslatedAudioChunk?: (chunk: { audio: string; timestamp: number }) => void;
+  onTranslatedAudioChunk?: (chunk: { audio: string; timestamp: number; sequenceNumber?: number; responseId?: string }) => void;
 }
 
 type Register = "formal" | "casual" | "technical" | "emotional";
@@ -219,7 +219,11 @@ export function useOpenAIRealtime({
   const lastCommitTimeRef = useRef(0);
   const isMutedRef = useRef(true);
   const rafRef = useRef<number | null>(null);
-  const onTranslatedAudioChunkRef = useRef<((chunk: { audio: string; timestamp: number }) => void) | undefined>();
+  const onTranslatedAudioChunkRef = useRef<((chunk: { audio: string; timestamp: number; sequenceNumber?: number; responseId?: string }) => void) | undefined>();
+
+  // Sequence number tracking for audio chunks (persists across renders)
+  const sequenceNumberRef = useRef(0);
+  const currentResponseIdRef = useRef<string | null>(null);
 
   // Update the callback ref when it changes
   useEffect(() => {
@@ -483,16 +487,29 @@ export function useOpenAIRealtime({
           case 'response.created':
             console.log('🎬 [OpenAI] Response created:', event.response.id);
             responseActiveRef.current = true;
+            
+            // Reset sequence number for new response
+            if (currentResponseIdRef.current !== event.response.id) {
+              console.log('🔢 [OpenAI] New response ID - resetting sequence counter');
+              sequenceNumberRef.current = 0;
+              currentResponseIdRef.current = event.response.id;
+            }
             break;
 
           case 'response.audio.delta':
-            // CRITICAL: Stream audio chunks immediately to other user
+            // CRITICAL: Stream audio chunks immediately to other user with proper sequencing
             // This is the real-time translation audio arriving word-by-word
             if (event.delta && onTranslatedAudioChunkRef.current) {
-              onTranslatedAudioChunkRef.current({
+              const chunk = {
                 audio: event.delta, // base64 PCM16 audio chunk
-                timestamp: Date.now()
-              });
+                timestamp: Date.now(),
+                sequenceNumber: sequenceNumberRef.current++,
+                responseId: currentResponseIdRef.current || event.response_id || 'unknown'
+              };
+              
+              console.log(`🎵 [OpenAI] Sending audio chunk #${chunk.sequenceNumber} for response ${chunk.responseId}`);
+              
+              onTranslatedAudioChunkRef.current(chunk);
             }
             break;
 

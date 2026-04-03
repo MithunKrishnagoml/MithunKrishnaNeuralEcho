@@ -222,9 +222,9 @@ export function RoomInterface() {
     },
     sendTranscriptToBackend: sendTranscript,
     onTranslatedAudioChunk: (chunk) => {
-      // Send translated audio to peer via WebSocket
-      console.log('🎵 [Audio] Got translated audio chunk, sending to peer');
-      sendAudioChunk(chunk.audio, chunk.timestamp);
+      // Send translated audio to peer via WebSocket with sequence number
+      console.log(`🎵 [Audio] Got translated audio chunk #${chunk.sequenceNumber}, sending to peer`);
+      sendAudioChunk(chunk.audio, chunk.timestamp, chunk.sequenceNumber, chunk.responseId);
     }
   });
 

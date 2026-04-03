@@ -113,14 +113,16 @@ export function useChatroomWS({
     }
   }, [roomId, userId]);
 
-  const sendAudioChunk = useCallback((audio: string, timestamp: number) => {
+  const sendAudioChunk = useCallback((audio: string, timestamp: number, sequenceNumber?: number, responseId?: string) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({
         type: 'AUDIO_CHUNK',
         roomId,
         userId,
         audio,
-        timestamp
+        timestamp,
+        sequenceNumber: sequenceNumber ?? 0,
+        responseId: responseId || 'unknown'
       }));
     }
   }, [roomId, userId]);

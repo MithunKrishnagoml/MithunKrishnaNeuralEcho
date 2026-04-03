@@ -785,7 +785,9 @@ wss.on('connection', (ws, req) => {
         }
       }
 
-      // Handle translated audio from frontend
+      // REMOVED: TRANSLATED_AUDIO path - using AUDIO_CHUNK streaming instead
+      // This eliminates dual-path confusion and reduces bandwidth
+      /*
       if (data.type === 'TRANSLATED_AUDIO') {
         const { participantId, audioData, originalText, translatedText, messageId } = data;
         console.log(`🎧 [TRANSLATED_AUDIO] From ${participantId}, audio size: ${audioData?.length || 0}`);
@@ -842,11 +844,12 @@ wss.on('connection', (ws, req) => {
           });
         }
       }
+      */
 
       // Handle real-time audio chunks
       if (data.type === 'AUDIO_CHUNK') {
-        const { participantId, pcmData, sampleRate, sequenceNumber, responseId } = data;
-        console.log(`🎵 [AUDIO_CHUNK] From ${participantId}, seq: ${sequenceNumber}, size: ${pcmData?.length || 0}`);
+        const { userId, audio, sequenceNumber, responseId } = data;
+        console.log(`🎵 [AUDIO_CHUNK] From ${userId}, seq: ${sequenceNumber}, size: ${audio?.length || 0}`);
         
         const connection = activeConnections.get(ws);
         if (!connection) return;
@@ -856,21 +859,22 @@ wss.on('connection', (ws, req) => {
         if (!translationSession) return;
 
         // Immediately relay audio chunk to other participant with zero buffering
-        const otherParticipant = translationSession.getOtherParticipant(participantId);
+        const otherParticipant = translationSession.getOtherParticipant(userId);
         if (otherParticipant?.socket?.readyState === WebSocket.OPEN) {
           const chunkMessage = {
             type: 'AUDIO_CHUNK',
             sessionId: sessionId,
-            fromParticipant: participantId,
-            pcmData: pcmData,
-            sampleRate: sampleRate || 24000,
-            sequenceNumber: sequenceNumber || 0,
-            responseId: responseId,
+            participantId: userId,
+            audioData: audio,
+            pcmData: audio, // Keep both for compatibility
+            chunkId: `chunk_${responseId}_${sequenceNumber}`,
+            sequenceNumber: sequenceNumber ?? 0,
+            responseId: responseId || 'unknown',
             timestamp: Date.now()
           };
           
           otherParticipant.socket.send(JSON.stringify(chunkMessage));
-          console.log(`🎵 [AUDIO_CHUNK] Relayed to other participant: seq ${sequenceNumber}`);
+          console.log(`🎵 [AUDIO_CHUNK] Relayed seq #${sequenceNumber} to other participant`);
         }
       }
 
