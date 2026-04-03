@@ -2,6 +2,9 @@
  * Application configuration from environment variables
  */
 
+// Frontend Base URL (for shareable links)
+export const APP_BASE_URL = import.meta.env.VITE_APP_BASE_URL ?? 'https://neuralecho1.vercel.app';
+
 // Backend API URL
 export const BACKEND_URL = import.meta.env.VITE_BACKEND_URL ?? 'https://neural-ix2j.onrender.com';
 
@@ -14,8 +17,9 @@ if (!import.meta.env.VITE_WS_URL && import.meta.env.PROD) {
   throw new Error('Missing required environment variable: VITE_WS_URL. Please set it in your deployment configuration.');
 }
 
-console.log(' [CONFIG] Backend API URL:', BACKEND_URL);
-console.log(' [CONFIG] WebSocket URL:', WS_URL);
+console.log('🌐 [CONFIG] App Base URL:', APP_BASE_URL);
+console.log('🔌 [CONFIG] Backend API URL:', BACKEND_URL);
+console.log('🔌 [CONFIG] WebSocket URL:', WS_URL);
 
 if (!import.meta.env.VITE_WS_URL) {
   console.warn('⚠️ [CONFIG] VITE_WS_URL not set, using fallback:', WS_URL);

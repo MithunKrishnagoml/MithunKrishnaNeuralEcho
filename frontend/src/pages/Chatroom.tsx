@@ -4,7 +4,7 @@ import { RoomJoinCreate } from '@/components/RoomJoinCreate';
 import { ChatroomInterface } from '@/components/ChatroomInterface';
 import { CreateRoomData, JoinRoomData, ChatroomParticipant } from '@/types/chatroom';
 import { toast } from 'sonner';
-import { BACKEND_URL } from '@/lib/config';
+import { BACKEND_URL, APP_BASE_URL } from '@/lib/config';
 
 const Chatroom = () => {
   const [searchParams] = useSearchParams();
@@ -81,8 +81,8 @@ const Chatroom = () => {
       setCurrentRoom(roomId);
       setParticipant(newParticipant);
       
-      // Create shareable link
-      const shareableLink = `${window.location.origin}/join/${roomId}`;
+      // Create shareable link using configured base URL
+      const shareableLink = `${APP_BASE_URL}/join/${roomId}`;
       
       toast.success(`Room created: ${roomId}`, {
         description: 'Room is ready! Share the link below with someone.',

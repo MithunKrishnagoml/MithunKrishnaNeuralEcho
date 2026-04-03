@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
+import { APP_BASE_URL } from "@/lib/config";
 
 interface WebRTCTranslationProps {
   onCallStarted?: () => void;
@@ -75,7 +76,7 @@ export function WebRTCTranslation({ onCallStarted, onCallEnded }: WebRTCTranslat
   }, [roomId]);
 
   const copyShareLink = useCallback(() => {
-    const shareLink = `${window.location.origin}/phone?room=${roomId}`;
+    const shareLink = `${APP_BASE_URL}/phone?room=${roomId}`;
     navigator.clipboard.writeText(shareLink);
   }, [roomId]);
 
@@ -176,7 +177,7 @@ export function WebRTCTranslation({ onCallStarted, onCallEnded }: WebRTCTranslat
                 </p>
                 <div className="flex items-center gap-2">
                   <code className="flex-1 text-xs bg-background px-2 py-1 rounded border">
-                    {window.location.origin}/phone?room={roomId}
+                    {APP_BASE_URL}/phone?room={roomId}
                   </code>
                   <Button
                     variant="outline"

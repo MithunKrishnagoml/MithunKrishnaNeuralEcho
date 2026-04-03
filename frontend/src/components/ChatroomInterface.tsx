@@ -29,6 +29,7 @@ import { RecordingControls } from '@/components/RecordingControls';
 import { StreamingTranscript } from '@/components/StreamingTranscript';
 import { TranslatingIndicator } from '@/components/TranslatingIndicator';
 import { toast } from 'sonner';
+import { APP_BASE_URL } from '@/lib/config';
 
 interface ChatroomInterfaceProps {
   roomId: string;
@@ -597,7 +598,7 @@ export function ChatroomInterface({ roomId, participant, onLeaveRoom }: Chatroom
   }, [isMuted]);
 
   const copyShareableLink = useCallback(() => {
-    const shareableLink = `${window.location.origin}/join/${roomId}`;
+    const shareableLink = `${APP_BASE_URL}/join/${roomId}`;
     navigator.clipboard.writeText(shareableLink);
     toast.success("Shareable link copied to clipboard!", {
       description: "Send this link to someone to join your translation room"
