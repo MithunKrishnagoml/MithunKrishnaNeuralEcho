@@ -141,6 +141,7 @@ export function useRealtimeVoice() {
     onPartialTranscript?: (delta: string, itemId: string) => void;
     onTranslationDelta?: (delta: string, responseId: string) => void;
     onAudioChunk?: (audioData: string, responseId: string) => void;
+    onSilenceDetected?: () => void;
   } | null>(null);
 
   const handleDataChannelMessage = useCallback((evt: MessageEvent) => {
