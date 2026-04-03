@@ -432,7 +432,8 @@ const STREAMING_MESSAGE_TYPES = new Set([
   'TRANSLATION_DELTA',
   'AUDIO_CHUNK',
   'VOICE_ACTIVITY_STARTED',
-  'VOICE_ACTIVITY_STOPPED'
+  'VOICE_ACTIVITY_STOPPED',
+  'CLEAR_AUDIO'
 ]);
 
 function relayStreamingMessage(data, senderWs) {
@@ -901,7 +902,33 @@ wss.on('connection', (ws, req) => {
         }
       }
 
-            // Handle room-based audio data
+      // Handle CLEAR_AUDIO (for interruptions)
+      if (data.type === 'CLEAR_AUDIO') {
+        const connection = activeConnections.get(ws);
+        if (!connection) return;
+
+        const { sessionId, userId } = connection;
+        const translationSession = translationSessions.get(sessionId);
+        if (!translationSession) return;
+
+        console.log(`🧹 [CLEAR_AUDIO] From ${userId} - relaying to other participant`);
+
+        // Relay CLEAR_AUDIO to other participant
+        const otherParticipant = translationSession.getOtherParticipant(userId);
+        if (otherParticipant?.socket?.readyState === WebSocket.OPEN) {
+          const clearMessage = {
+            type: 'CLEAR_AUDIO',
+            sessionId: sessionId,
+            participantId: userId,
+            timestamp: Date.now()
+          };
+          
+          otherParticipant.socket.send(JSON.stringify(clearMessage));
+          console.log(`🧹 [CLEAR_AUDIO] Relayed to other participant`);
+        }
+      }
+
+      // Handle room-based audio data
       if (data.type === 'ROOM_AUDIO_DATA') {
         const { participantId, audioData } = data;
         console.log(`=�Ħ [ROOM AUDIO] From ${participantId}`);
