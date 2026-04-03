@@ -26,7 +26,9 @@ export function useChatroomConnection({ roomId, participant, onEvent }: UseChatr
   useEffect(() => {
     translatedAudioPlayerRef.current = new StreamingAudioPlayer({
       sampleRate: 24000,
-      maxQueueSize: 48000 * 10, // 10 seconds
+      maxQueueChunks: 150, // Maximum chunks in queue
+      minBufferChunks: 3, // Buffer 3 chunks before starting
+      minBufferMs: 80, // Or 80ms, whichever comes first
       debug: true, // Enable debug temporarily
       onError: (error) => {
         console.error('❌ Translated audio player error:', error);
@@ -155,18 +157,20 @@ export function useChatroomConnection({ roomId, participant, onEvent }: UseChatr
           case 'translation_ready':
             console.log(' Translation session is ready with 2 participants');
             console.log(' Both participants are now connected!');
-            console.log(' Other participant info:', data.otherParticipant);
-            
-            // Set other participant from the translation_ready event if not already set
-            if (!otherParticipant && data.otherParticipant) {
-              console.log(' Setting other participant from translation_ready:', data.otherParticipant.name);
-              setOtherParticipant({
-                id: data.otherParticipant.id,
-                name: data.otherParticipant.name,
-                language: data.otherParticipant.language,
-                joinedAt: new Date(),
-                isConnected: true
-              });
+            if ('otherParticipant' in data && data.otherParticipant) {
+              console.log(' Other participant info:', data.otherParticipant);
+              
+              // Set other participant from the translation_ready event if not already set
+              if (!otherParticipant) {
+                console.log(' Setting other participant from translation_ready:', data.otherParticipant.name);
+                setOtherParticipant({
+                  id: data.otherParticipant.id,
+                  name: data.otherParticipant.name,
+                  language: data.otherParticipant.language,
+                  joinedAt: new Date(),
+                  isConnected: true
+                });
+              }
             } else if (!otherParticipant) {
               // Fallback if server doesn't send participant info
               console.warn(' No other participant info received, using fallback');
@@ -251,7 +255,7 @@ export function useChatroomConnection({ roomId, participant, onEvent }: UseChatr
           case 'translation_error':
             console.warn(' Translation error received:', data.message);
             // Don't block transcript processing - just log the error
-            if (data.recoverable) {
+            if ('recoverable' in data && data.recoverable) {
               console.log(' Translation error is recoverable, continuing transcript processing');
             }
             break;
@@ -266,9 +270,9 @@ export function useChatroomConnection({ roomId, participant, onEvent }: UseChatr
             console.log('🎵 [AUDIO_CHUNK] Received audio chunk');
             console.log('🎵 [AUDIO_CHUNK] From participant:', data.participantId);
             console.log('🎵 [AUDIO_CHUNK] My participant ID:', participant.id);
-            console.log('🎵 [AUDIO_CHUNK] Sequence number:', data.sequenceNumber || 'no-seq');
+            console.log('🎵 [AUDIO_CHUNK] Sequence number:', ('sequenceNumber' in data ? data.sequenceNumber : 'no-seq'));
             console.log('🎵 [AUDIO_CHUNK] Response ID:', data.responseId);
-            console.log('🎵 [AUDIO_CHUNK] PCM data size:', data.pcmData?.length || 0, 'bytes');
+            console.log('🎵 [AUDIO_CHUNK] PCM data size:', ('pcmData' in data && data.pcmData ? data.pcmData.length : 0), 'bytes');
             console.log('🎵 [AUDIO_CHUNK] Player ready:', !!translatedAudioPlayerRef.current);
             console.log('🎵 ═══════════════════════════════════════════════════════');
             
@@ -278,7 +282,8 @@ export function useChatroomConnection({ roomId, participant, onEvent }: UseChatr
               break;
             }
             
-            if (!data.pcmData) {
+            const pcmData = 'pcmData' in data ? data.pcmData : data.audioData;
+            if (!pcmData) {
               console.error('❌ [AUDIO_CHUNK] FAILED - No pcmData in event');
               break;
             }
@@ -294,10 +299,10 @@ export function useChatroomConnection({ roomId, participant, onEvent }: UseChatr
               
               // Convert base64 PCM to audio chunk format
               const chunk = {
-                id: `chunk_${data.responseId}_${data.sequenceNumber || Date.now()}`,
-                data: data.pcmData,
+                id: `chunk_${data.responseId}_${('sequenceNumber' in data && data.sequenceNumber) || Date.now()}`,
+                data: pcmData,
                 timestamp: data.timestamp || Date.now(),
-                sequenceNumber: data.sequenceNumber,
+                sequenceNumber: 'sequenceNumber' in data ? data.sequenceNumber : undefined,
                 responseId: data.responseId || 'unknown'
               };
               
@@ -311,6 +316,16 @@ export function useChatroomConnection({ roomId, participant, onEvent }: UseChatr
           case 'AUDIO_STREAM_END':
             console.log('🏁 Audio stream ended for response:', data.responseId);
             // Optional: show visual indicator that utterance is complete
+            break;
+            
+          case 'CLEAR_AUDIO':
+            console.log('🧹 [CLEAR_AUDIO] Received - clearing translated audio queue');
+            if (translatedAudioPlayerRef.current) {
+              translatedAudioPlayerRef.current.clearQueue();
+              console.log('✅ [CLEAR_AUDIO] Queue cleared successfully');
+            } else {
+              console.warn('⚠️ [CLEAR_AUDIO] Player not available');
+            }
             break;
             
           case 'TRANSLATED_AUDIO':
@@ -562,7 +577,7 @@ export function useChatroomConnection({ roomId, participant, onEvent }: UseChatr
     setOtherParticipant(null);
   }, []);
 
-  const sendEvent = useCallback((event: Omit<ChatroomEvent, 'type'> & { type: string }) => {
+  const sendEvent = useCallback((event: { type: string; [key: string]: any }) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify(event));
     }

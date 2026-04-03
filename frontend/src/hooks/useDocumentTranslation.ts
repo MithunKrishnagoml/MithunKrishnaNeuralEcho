@@ -192,7 +192,7 @@ Output ONLY the translation without any explanations or notes.`;
   // Download as formatted PDF with structure preservation
   const downloadTranslationAsPDF = useCallback(async (result: DocumentTranslationResult) => {
     try {
-      const { jsPDF } = await import('jspdf');
+      const jsPDF = (await import('jspdf')).default;
       const doc = new jsPDF({
         orientation: 'portrait',
         unit: 'mm',
@@ -279,7 +279,7 @@ Output ONLY the translation without any explanations or notes.`;
       addStructuredText(translatedStructure);
 
       // Add professional footer
-      const totalPages = doc.getNumberOfPages();
+      const totalPages = (doc as any).internal.getNumberOfPages();
       for (let i = 1; i <= totalPages; i++) {
         doc.setPage(i);
         doc.setFontSize(8);

@@ -85,12 +85,12 @@ export type ChatroomEvent =
   | { type: 'CONNECTION_ESTABLISHED'; message: string }
   | { type: 'joined_session'; sessionId: string; userId: string; participantCount: number }
   | { type: 'participant_joined'; sessionId: string; participantCount: number; newParticipantLanguage: 'en-US' | 'fr-CA' }
-  | { type: 'translation_ready'; message: string; participantCount: number }
+  | { type: 'translation_ready'; message: string; participantCount: number; otherParticipant?: { id: string; name: string; language: 'en-US' | 'fr-CA' } }
   | { type: 'USER_JOINED_ROOM'; sessionId: string; userId?: string; participantCount: number; language?: 'en-US' | 'fr-CA'; newParticipantLanguage?: 'en-US' | 'fr-CA'; newParticipantName?: string }
   | { type: 'USER_LEFT_ROOM'; sessionId: string; userId: string; participantCount: number }
   | { type: 'SPEECH_TRANSCRIPT'; participantId: string; transcript: string; language: 'en-US' | 'fr-CA'; fromParticipant?: string; originalText?: string; originalLanguage?: 'en-US' | 'fr-CA'; timestamp?: number }
-  | { type: 'TRANSLATED_MESSAGE'; sessionId?: string; fromParticipant?: string; message: ChatroomMessage; timestamp: number }
-  | { type: 'TRANSLATED_AUDIO'; sessionId?: string; fromParticipant?: string; audioData: string; timestamp: number; quality?: string; processingTime?: number }
+  | { type: 'TRANSLATED_MESSAGE'; sessionId?: string; fromParticipant?: string; message: ChatroomMessage; timestamp: number; messageId?: string }
+  | { type: 'TRANSLATED_AUDIO'; sessionId?: string; fromParticipant?: string; audioData: string; timestamp: number; quality?: string; processingTime?: number; messageId?: string }
   | { type: 'ROOM_HISTORY_UPDATE'; sessionId: string; messageHistory: ChatroomMessage[]; totalMessages?: number; latestMessage?: ChatroomMessage }
   | { type: 'TRANSCRIPT_HISTORY_UPDATE'; sessionId: string; transcriptHistory: TranscriptMessage[]; totalMessages?: number; latestMessage?: TranscriptMessage }
   | { type: 'TRANSCRIPT_MESSAGE_ADDED'; sessionId: string; message: TranscriptMessage }
@@ -105,12 +105,14 @@ export type ChatroomEvent =
   | { type: 'transcript_delta'; sessionId?: string; fromParticipant?: string; delta: string; timestamp: number; confidence: number }
   | { type: 'PARTIAL_TRANSCRIPT'; sessionId: string; participantId: string; delta: string; itemId: string; timestamp: number }
   | { type: 'TRANSLATION_DELTA'; sessionId: string; participantId: string; delta: string; responseId: string; targetLanguage: 'en-US' | 'fr-CA'; timestamp: number }
-  | { type: 'AUDIO_CHUNK'; sessionId: string; participantId: string; audioData: string; responseId: string; chunkId: string; timestamp: number }
+  | { type: 'AUDIO_CHUNK'; sessionId: string; participantId: string; audioData: string; responseId: string; chunkId: string; timestamp: number; sequenceNumber?: number; pcmData?: string }
+  | { type: 'AUDIO_STREAM_END'; sessionId: string; participantId: string; responseId: string; timestamp: number }
+  | { type: 'CLEAR_AUDIO'; sessionId: string; participantId: string; timestamp: number }
   | { type: 'VOICE_ACTIVITY_STARTED'; sessionId: string; participantId: string; timestamp: number }
   | { type: 'VOICE_ACTIVITY_STOPPED'; sessionId: string; participantId: string; timestamp: number }
-  | { type: 'translation_error'; sessionId?: string; fromParticipant?: string; error: any; message?: string; timestamp: number; recovery?: string; retryable?: boolean }
+  | { type: 'translation_error'; sessionId?: string; fromParticipant?: string; error: any; message?: string; timestamp: number; recovery?: string; retryable?: boolean; recoverable?: boolean }
   | { type: 'quality_feedback'; processingTime: number; qualityScore: number; recommendations: string[]; timestamp: number }
-  | { type: 'session_complete'; sessionId?: string; fromParticipant?: string; userId?: string; totalProcessingTime: number; timestamp: number; performance: string }
+  | { type: 'session_complete'; sessionId?: string; fromParticipant?: string; userId?: string; totalProcessingTime: number; timestamp: number; performance: string; message?: string; participantId?: string; messageId?: string }
   | { type: 'system_error'; message: string; timestamp: number; recovery: string }
   | { type: 'AUDIO_STREAM'; participantId: string; audioData: string; targetParticipantId: string }
   | { type: 'ROOM_FULL'; roomId: string }
