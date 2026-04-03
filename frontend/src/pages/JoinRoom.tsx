@@ -6,8 +6,6 @@ import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Globe, Users, Loader2, ArrowRight, AlertCircle } from 'lucide-react';
-import { ChatroomInterface } from '@/components/ChatroomInterface';
-import { ChatroomParticipant } from '@/types/chatroom';
 import { BACKEND_URL } from '@/lib/config';
 
 // Detect browser language and pre-select French if applicable
@@ -31,8 +29,6 @@ const JoinRoom = () => {
   const [language, setLanguage] = useState<'en-US' | 'fr-CA'>(detectLanguage);
   const [isJoining, setIsJoining] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [participant, setParticipant] = useState<ChatroomParticipant | null>(null);
-  const [currentRoom, setCurrentRoom] = useState<string | null>(null);
 
   // If no roomId in URL at all, stay on page and show error — do NOT silently redirect
   useEffect(() => {
@@ -40,13 +36,6 @@ const JoinRoom = () => {
       setError('No session ID found in this link. Please ask the host to share the link again.');
     }
   }, [roomId]);
-
-  const generateParticipantId = () => {
-    if (typeof crypto !== 'undefined' && crypto.randomUUID) {
-      return `participant-${crypto.randomUUID()}`;
-    }
-    return `participant-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
-  };
 
   const handleJoin = async () => {
     if (!name.trim()) {
@@ -92,17 +81,8 @@ const JoinRoom = () => {
         return;
       }
 
-      // All good — enter the chatroom
-      const newParticipant: ChatroomParticipant = {
-        id: generateParticipantId(),
-        name: name.trim(),
-        language,
-        joinedAt: new Date(),
-        isConnected: true,
-      };
-
-      setParticipant(newParticipant);
-      setCurrentRoom(roomId);
+      // All good — navigate to room interface (same as creator)
+      window.location.href = `/room/${roomId}?name=${encodeURIComponent(name.trim())}&language=${encodeURIComponent(language)}`;
 
     } catch {
       setError('Could not connect to the server. Please check your internet connection.');
@@ -112,21 +92,19 @@ const JoinRoom = () => {
   };
 
   const handleLeaveRoom = () => {
-    setParticipant(null);
-    setCurrentRoom(null);
     navigate('/chatroom');
   };
 
-  // Already joined — show chatroom directly
-  if (participant && currentRoom) {
-    return (
-      <ChatroomInterface
-        roomId={currentRoom}
-        participant={participant}
-        onLeaveRoom={handleLeaveRoom}
-      />
-    );
-  }
+  // Remove the ChatroomInterface rendering since we navigate instead
+  // if (participant && currentRoom) {
+  //   return (
+  //     <ChatroomInterface
+  //       roomId={currentRoom}
+  //       participant={participant}
+  //       onLeaveRoom={handleLeaveRoom}
+  //     />
+  //   );
+  // }
 
   return (
     <div className="min-h-screen bg-background flex items-center justify-center p-6">
