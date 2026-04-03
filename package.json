@@ -1,0 +1,12 @@
+{
+  "name": "neural-monorepo-deploy-shim",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "postinstall": "npm --prefix backend install",
+    "build": "npm --prefix frontend install && npm --prefix frontend run build"
+  },
+  "engines": {
+    "node": "20.x"
+  }
+}
