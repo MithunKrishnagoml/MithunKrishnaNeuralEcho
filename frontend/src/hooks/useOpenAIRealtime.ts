@@ -324,9 +324,9 @@ export function useOpenAIRealtime({
       source.connect(preprocessNode);
       preprocessNode.connect(processedDest);
 
-      // ── TWO-TIER AUDIO SEND LOOP ──
+      // ── CONTINUOUS AUDIO STREAMING (Server VAD Mode) ──
       preprocessNode.port.onmessage = (e) => {
-        const { pcm, rms, wordBoundary, phraseBoundary, commitEnergy, commitDurationMs } = e.data;
+        const { pcm, rms } = e.data;
 
         // Update VAD meter
         setMicLevel(Math.min(100, Math.round(rms * 500)));
@@ -334,7 +334,13 @@ export function useOpenAIRealtime({
         // Skip sending if muted
         if (isMutedRef.current) return;
 
-        // ── STEP 1: Convert Float32 → PCM16 → base64 ──
+        // Only send audio if RMS is above noise threshold (filter silence)
+        const NOISE_THRESHOLD = 0.0003;
+        if (rms < NOISE_THRESHOLD) {
+          return; // Skip silent frames to reduce OpenAI processing load
+        }
+
+        // ── Convert Float32 → PCM16 → base64 ──
         const float32 = new Float32Array(pcm);
         const int16 = new Int16Array(float32.length);
         for (let i = 0; i < float32.length; i++) {
@@ -344,93 +350,22 @@ export function useOpenAIRealtime({
           String.fromCharCode(...new Uint8Array(int16.buffer))
         );
 
-        // ── STEP 2: Append audio chunk to OpenAI buffer ──
+        // ── Check WebSocket backpressure before sending ──
         if (dc.readyState === "open") {
+          // Check bufferedAmount to prevent self-inflicted latency
+          const BACKPRESSURE_THRESHOLD = 64 * 1024; // 64KB
+          
+          if ((dc as any).bufferedAmount !== undefined && (dc as any).bufferedAmount > BACKPRESSURE_THRESHOLD) {
+            console.warn(`⚠️ WebSocket backpressure — skipping chunk (buffered: ${(dc as any).bufferedAmount} bytes)`);
+            return; // Skip this chunk rather than blocking
+          }
+          
+          // ── Continuously append audio to OpenAI buffer ──
+          // Server VAD will automatically detect speech and trigger translation
           dc.send(JSON.stringify({
             type: "input_audio_buffer.append",
             audio: base64
           }));
-        }
-
-        // ── STEP 3: Handle boundaries ──
-        if ((wordBoundary || phraseBoundary) && dc.readyState === "open") {
-          lastCommitTimeRef.current = Date.now();
-
-          // Energy-based hallucination filter
-          const MIN_ENERGY = 0.0003;  // minimum average RMS² to be real speech
-          const MIN_DURATION = 120;   // minimum 120ms of speech to commit
-
-          if (commitEnergy < MIN_ENERGY || commitDurationMs < MIN_DURATION) {
-            // Too short or too quiet — likely noise, not speech
-            console.warn("[VAD] Low energy/duration, clearing buffer:", { commitEnergy, commitDurationMs });
-            dc.send(JSON.stringify({ type: "input_audio_buffer.clear" }));
-            return;
-          }
-
-          // Cancel any in-progress response
-          if (responseActiveRef.current) {
-            dc.send(JSON.stringify({ type: "response.cancel" }));
-            responseActiveRef.current = false;
-          }
-
-          // Commit the buffered audio
-          dc.send(JSON.stringify({
-            type: "input_audio_buffer.commit"
-          }));
-
-          // Choose modalities based on boundary type
-          const modalities = phraseBoundary ? ["text", "audio"] : ["text"];
-          const instructions = phraseBoundary
-            ? buildInstructions(myLanguage, targetLanguage, currentRegisterRef.current, conversationContextRef.current.fullHistory)
-            : `Transcribe the new audio fragment. Output only the transcription.`;
-
-          // Request response
-          dc.send(JSON.stringify({
-            type: "response.create",
-            response: {
-              modalities,
-              instructions
-            }
-          }));
-
-          responseActiveRef.current = true;
-
-          // Set up sentence end timer (2s silence = sentence done)
-          clearTimeout(sentenceEndTimerRef.current);
-          sentenceEndTimerRef.current = setTimeout(() => {
-            if (activeSentenceRef.current) {
-              // Archive completed sentence
-              conversationContextRef.current.fullHistory.push({
-                original: conversationContextRef.current.currentSentenceOriginal,
-                translated: conversationContextRef.current.currentSentenceTranslated
-              });
-
-              // Keep only last 10 exchanges
-              if (conversationContextRef.current.fullHistory.length > 10) {
-                conversationContextRef.current.fullHistory.shift();
-              }
-
-              // Update register for next sentence
-              currentRegisterRef.current = detectRegister(conversationContextRef.current.fullHistory);
-
-              // Reset current sentence
-              conversationContextRef.current.currentSentenceOriginal = "";
-              conversationContextRef.current.currentSentenceTranslated = "";
-
-              // Mark sentence as done
-              setMyTranscripts(prev => upsert(prev, {
-                id: activeSentenceRef.current!.id,
-                originalText: activeSentenceRef.current!.words.map(w => w.original).join(' '),
-                translatedText: activeSentenceRef.current!.words.map(w => w.translated).filter(Boolean).join(' '),
-                status: "done",
-                timestamp: Date.now()
-              }));
-
-              // Send sentence done to backend
-              sendTranscriptToBackend("", "SENTENCE_DONE");
-              activeSentenceRef.current = null;
-            }
-          }, 2000);
         }
       };
 
@@ -456,15 +391,15 @@ export function useOpenAIRealtime({
             output_audio_format: 'pcm16',
             input_audio_transcription: {
               model: 'whisper-1',
-              language: myLanguage,
+              language: myLanguage === 'en' ? 'en' : 'fr', // Use ISO 639-1 codes for Whisper
               temperature: 0.0, // Maximum accuracy for transcription
               prompt: `This is a conversation in ${myLanguage === 'en' ? 'English' : 'French'}. Transcribe exactly what is said, including filler words, repetitions, and natural speech patterns.`
             },
             turn_detection: {
               type: 'server_vad',
-              threshold: 0.5,        // Voice activity threshold (0.0-1.0)
-              prefix_padding_ms: 300, // Audio before speech starts
-              silence_duration_ms: 500 // Silence duration to end turn
+              threshold: 0.4,        // Lower threshold for faster detection (0.0-1.0)
+              prefix_padding_ms: 100, // Minimal padding for low latency
+              silence_duration_ms: 200 // Short silence for continuous streaming
             },
             temperature: 0.1, // Lower temperature for more consistent translations
             max_response_output_tokens: 250 // Reasonable limit for translations
@@ -478,11 +413,35 @@ export function useOpenAIRealtime({
         console.log('🎯 [OpenAI] Event:', event.type);
 
         switch (event.type) {
+          case 'input_audio_buffer.speech_started':
+            console.log('🎤 [OpenAI] Speech started - Server VAD detected voice activity');
+            setIsVoiceActive(true);
+            onVoiceActivityStart();
+            
+            // Cancel any in-progress response when new speech starts (interruption)
+            if (responseActiveRef.current) {
+              console.log('🛑 [OpenAI] Interrupting previous response');
+              dc.send(JSON.stringify({ type: "response.cancel" }));
+              responseActiveRef.current = false;
+              
+              // Send CLEAR_AUDIO to backend to flush other user's audio queue
+              sendTranscriptToBackend({
+                type: 'CLEAR_AUDIO',
+                participantId: 'self'
+              }, 'DELTA');
+            }
+            break;
+
+          case 'input_audio_buffer.speech_stopped':
+            console.log('🔇 [OpenAI] Speech stopped - Server VAD detected silence');
+            setIsVoiceActive(false);
+            onVoiceActivityStop();
+            break;
+
           case 'conversation.item.input_audio_transcription.completed':
             // Filter hallucinations
             if (isHallucination(event.transcript)) {
               console.warn("[VAD] Hallucination filtered:", event.transcript);
-              dc.send(JSON.stringify({ type: "response.cancel" }));
               return;
             }
 
@@ -519,6 +478,22 @@ export function useOpenAIRealtime({
               translatedText: conversationContextRef.current.currentSentenceTranslated,
               wordCount: activeSentenceRef.current.words.length
             }, 'DELTA');
+            break;
+
+          case 'response.created':
+            console.log('🎬 [OpenAI] Response created:', event.response.id);
+            responseActiveRef.current = true;
+            break;
+
+          case 'response.audio.delta':
+            // CRITICAL: Stream audio chunks immediately to other user
+            // This is the real-time translation audio arriving word-by-word
+            if (event.delta && onTranslatedAudioChunkRef.current) {
+              onTranslatedAudioChunkRef.current({
+                audio: event.delta, // base64 PCM16 audio chunk
+                timestamp: Date.now()
+              });
+            }
             break;
 
           case 'response.audio_transcript.delta':
@@ -572,14 +547,51 @@ export function useOpenAIRealtime({
             accumulatedTranscriptRef.current = '';
             break;
 
-          case 'input_audio_buffer.speech_started':
-            setIsVoiceActive(true);
-            onVoiceActivityStart();
+          case 'response.done':
+            console.log('✅ [OpenAI] Response complete');
+            responseActiveRef.current = false;
+            
+            // Archive completed sentence after a delay
+            clearTimeout(sentenceEndTimerRef.current);
+            sentenceEndTimerRef.current = setTimeout(() => {
+              if (activeSentenceRef.current) {
+                // Archive completed sentence
+                conversationContextRef.current.fullHistory.push({
+                  original: conversationContextRef.current.currentSentenceOriginal,
+                  translated: conversationContextRef.current.currentSentenceTranslated
+                });
+
+                // Keep only last 10 exchanges
+                if (conversationContextRef.current.fullHistory.length > 10) {
+                  conversationContextRef.current.fullHistory.shift();
+                }
+
+                // Update register for next sentence
+                currentRegisterRef.current = detectRegister(conversationContextRef.current.fullHistory);
+
+                // Reset current sentence
+                conversationContextRef.current.currentSentenceOriginal = "";
+                conversationContextRef.current.currentSentenceTranslated = "";
+
+                // Mark sentence as done
+                setMyTranscripts(prev => upsert(prev, {
+                  id: activeSentenceRef.current!.id,
+                  originalText: activeSentenceRef.current!.words.map(w => w.original).join(' '),
+                  translatedText: activeSentenceRef.current!.words.map(w => w.translated).filter(Boolean).join(' '),
+                  status: "done",
+                  timestamp: Date.now()
+                }));
+
+                // Send sentence done to backend
+                sendTranscriptToBackend("", "SENTENCE_DONE");
+                activeSentenceRef.current = null;
+              }
+            }, 1500);
             break;
 
-          case 'input_audio_buffer.speech_stopped':
-            setIsVoiceActive(false);
-            onVoiceActivityStop();
+          case 'response.cancelled':
+            console.log('🛑 [OpenAI] Response cancelled');
+            responseActiveRef.current = false;
             break;
 
           case 'error':
@@ -622,6 +634,11 @@ export function useOpenAIRealtime({
       setIsMuted(true);
     }
     isMutedRef.current = true;
+    
+    // Clear any buffered audio when muting
+    if (dcRef.current?.readyState === "open") {
+      dcRef.current.send(JSON.stringify({ type: "input_audio_buffer.clear" }));
+    }
   }, []);
 
   const unmute = useCallback(() => {

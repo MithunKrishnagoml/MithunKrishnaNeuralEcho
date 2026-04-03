@@ -14,8 +14,12 @@ export interface AudioChunk {
 export interface StreamingAudioPlayerOptions {
   /** Sample rate for audio context (default: 24000 Hz for OpenAI Realtime API) */
   sampleRate?: number;
-  /** Maximum number of samples to keep in queue */
-  maxQueueSize?: number;
+  /** Maximum number of chunks to keep in queue (default: 150) */
+  maxQueueChunks?: number;
+  /** Minimum chunks to buffer before starting playback (default: 3) */
+  minBufferChunks?: number;
+  /** Minimum milliseconds to buffer before starting playback (default: 80ms) */
+  minBufferMs?: number;
   /** Enable debug logging */
   debug?: boolean;
   /** Callback when playback starts */
@@ -31,16 +35,26 @@ export class StreamingAudioPlayer {
   private workletNode: AudioWorkletNode | null = null;
   private gainNode: GainNode | null = null;
   private pendingChunks: AudioChunk[] = [];
+  private reorderBuffer: Map<number, AudioChunk> = new Map();
+  private nextExpectedSequence: number = 0;
+  private reorderTimeout: NodeJS.Timeout | null = null;
   private isInitialized: boolean = false;
   private isDestroyed: boolean = false;
   private options: Required<StreamingAudioPlayerOptions>;
   private userGestureReceived: boolean = false;
   private currentResponseId: string | null = null;
+  private hasStartedPlayback: boolean = false;
+  private bufferedChunks: AudioChunk[] = [];
+  private bufferHealthInterval: NodeJS.Timeout | null = null;
+  private lastBufferHealthLog: number = 0;
+  private visibilityChangeHandler: (() => void) | null = null;
 
   constructor(options: StreamingAudioPlayerOptions = {}) {
     this.options = {
       sampleRate: options.sampleRate || 24000,
-      maxQueueSize: options.maxQueueSize || 48000 * 10, // 10 seconds at 48kHz
+      maxQueueChunks: options.maxQueueChunks || 150,
+      minBufferChunks: options.minBufferChunks || 3,
+      minBufferMs: options.minBufferMs || 80,
       debug: options.debug || false,
       onPlaybackStart: options.onPlaybackStart || (() => {}),
       onPlaybackEnd: options.onPlaybackEnd || (() => {}),
@@ -48,14 +62,22 @@ export class StreamingAudioPlayer {
     };
 
     this.initializeAudioWorklet();
+    this.setupVisibilityHandler();
+    this.startBufferHealthMonitoring();
   }
 
   private async initializeAudioWorklet(): Promise<void> {
     try {
-      // Create AudioContext with specified sample rate
+      // Create AudioContext with specified sample rate (locked to 24kHz)
       this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)({
         sampleRate: this.options.sampleRate
       });
+
+      // Verify sample rate - some browsers may refuse 24kHz
+      if (this.audioContext.sampleRate !== this.options.sampleRate) {
+        console.warn(`[StreamingAudioPlayer] Browser refused ${this.options.sampleRate}Hz, using ${this.audioContext.sampleRate}Hz instead`);
+        // TODO: Implement resampler if needed for mobile browsers
+      }
 
       if (this.options.debug) {
         console.log('[StreamingAudioPlayer] AudioContext created:', {
@@ -96,6 +118,48 @@ export class StreamingAudioPlayer {
   }
 
   /**
+   * Setup visibility change handler to resume AudioContext when tab becomes visible
+   */
+  private setupVisibilityHandler(): void {
+    this.visibilityChangeHandler = async () => {
+      if (document.visibilityState === 'visible') {
+        await this.ensureAudioContextResumed();
+        if (this.options.debug) {
+          console.log('[StreamingAudioPlayer] Tab became visible - AudioContext resumed');
+        }
+      }
+    };
+    
+    document.addEventListener('visibilitychange', this.visibilityChangeHandler);
+  }
+
+  /**
+   * Start monitoring buffer health
+   */
+  private startBufferHealthMonitoring(): void {
+    this.bufferHealthInterval = setInterval(() => {
+      const now = Date.now();
+      if (now - this.lastBufferHealthLog >= 2000) {
+        this.logBufferHealth();
+        this.lastBufferHealthLog = now;
+      }
+    }, 2000);
+  }
+
+  /**
+   * Log buffer health metrics
+   */
+  private logBufferHealth(): void {
+    if (!this.hasStartedPlayback) return;
+    
+    const currentDepth = this.bufferedChunks.length + this.pendingChunks.length;
+    const targetDepth = this.options.minBufferChunks;
+    const health = Math.min(100, Math.round((currentDepth / targetDepth) * 100));
+    
+    console.log(`📊 Buffer health: ${health}% (queue: ${currentDepth} chunks)`);
+  }
+
+  /**
    * Ensure AudioContext is resumed (handle autoplay policy)
    */
   private async ensureAudioContextResumed(): Promise<void> {
@@ -133,7 +197,7 @@ export class StreamingAudioPlayer {
   }
 
   /**
-   * Add an audio chunk to the playback queue
+   * Add an audio chunk to the playback queue with reordering support
    */
   public async addChunk(chunk: AudioChunk): Promise<void> {
     if (this.isDestroyed) {
@@ -142,6 +206,9 @@ export class StreamingAudioPlayer {
       }
       return;
     }
+
+    // Always ensure AudioContext is resumed before queuing
+    await this.ensureAudioContextResumed();
 
     if (!this.isInitialized) {
       // Queue chunk until worklet is ready
@@ -152,7 +219,124 @@ export class StreamingAudioPlayer {
       return;
     }
 
-    await this.processChunk(chunk);
+    // Handle sequence number reordering
+    if (chunk.sequenceNumber !== undefined) {
+      await this.handleReordering(chunk);
+    } else {
+      // No sequence number - process immediately
+      await this.bufferChunk(chunk);
+    }
+  }
+
+  /**
+   * Handle out-of-order chunk reordering
+   */
+  private async handleReordering(chunk: AudioChunk): Promise<void> {
+    const seq = chunk.sequenceNumber!;
+
+    // Reset sequence tracking on new response
+    if (this.currentResponseId !== chunk.responseId) {
+      this.reorderBuffer.clear();
+      this.nextExpectedSequence = 0;
+      if (this.reorderTimeout) {
+        clearTimeout(this.reorderTimeout);
+        this.reorderTimeout = null;
+      }
+    }
+
+    // Check if this is the next expected chunk
+    if (seq === this.nextExpectedSequence) {
+      // Process this chunk
+      await this.bufferChunk(chunk);
+      this.nextExpectedSequence++;
+
+      // Process any buffered chunks that are now in sequence
+      while (this.reorderBuffer.has(this.nextExpectedSequence)) {
+        const nextChunk = this.reorderBuffer.get(this.nextExpectedSequence)!;
+        this.reorderBuffer.delete(this.nextExpectedSequence);
+        await this.bufferChunk(nextChunk);
+        this.nextExpectedSequence++;
+      }
+    } else if (seq > this.nextExpectedSequence) {
+      // Future chunk - buffer it
+      this.reorderBuffer.set(seq, chunk);
+
+      // Set timeout to skip missing chunks after 40ms
+      if (!this.reorderTimeout) {
+        this.reorderTimeout = setTimeout(() => {
+          // Check for gaps
+          while (this.reorderBuffer.has(this.nextExpectedSequence + 1)) {
+            console.warn(`⚠️ Dropped out-of-order chunk #${this.nextExpectedSequence}`);
+            this.nextExpectedSequence++;
+
+            // Process the next available chunk
+            const nextChunk = this.reorderBuffer.get(this.nextExpectedSequence)!;
+            this.reorderBuffer.delete(this.nextExpectedSequence);
+            this.bufferChunk(nextChunk);
+            this.nextExpectedSequence++;
+          }
+          this.reorderTimeout = null;
+        }, 40);
+      }
+    } else {
+      // Old chunk - skip it
+      if (this.options.debug) {
+        console.warn(`[StreamingAudioPlayer] Skipping old chunk #${seq} (expected #${this.nextExpectedSequence})`);
+      }
+    }
+  }
+
+  /**
+   * Buffer chunk and start playback when ready
+   */
+  private async bufferChunk(chunk: AudioChunk): Promise<void> {
+    this.bufferedChunks.push(chunk);
+
+    // Check queue overflow
+    if (this.bufferedChunks.length > this.options.maxQueueChunks) {
+      const dropped = this.bufferedChunks.shift();
+      console.warn(`⚠️ Queue overflow — dropping old chunks (dropped chunk: ${dropped?.id})`);
+    }
+
+    // Start playback when buffer is ready
+    if (!this.hasStartedPlayback) {
+      const shouldStart = 
+        this.bufferedChunks.length >= this.options.minBufferChunks ||
+        this.getBufferedMs() >= this.options.minBufferMs;
+
+      if (shouldStart) {
+        this.hasStartedPlayback = true;
+        console.log(`🎬 Starting playback with ${this.bufferedChunks.length} chunks buffered (${this.getBufferedMs()}ms)`);
+        this.options.onPlaybackStart();
+        
+        // Start draining buffer
+        this.drainBuffer();
+      }
+    } else {
+      // Already playing - check for starvation
+      if (this.bufferedChunks.length < 2) {
+        console.warn(`⚠️ Queue starvation — buffer running low (${this.bufferedChunks.length} chunks)`);
+        // TODO: Implement playback rate nudge (0.98x) for 50ms
+      }
+    }
+  }
+
+  /**
+   * Drain buffered chunks to worklet
+   */
+  private async drainBuffer(): Promise<void> {
+    while (this.bufferedChunks.length > 0 && !this.isDestroyed) {
+      const chunk = this.bufferedChunks.shift()!;
+      await this.processChunk(chunk);
+    }
+  }
+
+  /**
+   * Get buffered duration in milliseconds
+   */
+  private getBufferedMs(): number {
+    // Estimate: assume ~20ms per chunk (typical for streaming)
+    return this.bufferedChunks.length * 20;
   }
 
   /**
@@ -182,11 +366,18 @@ export class StreamingAudioPlayer {
     }
 
     try {
-      // Detect responseId change and clear queue
-      if (this.currentResponseId !== null && this.currentResponseId !== chunk.responseId) {
-        console.log('🧹 [StreamingAudioPlayer] ResponseId CHANGED - clearing old queue:', {
+      // Detect new response for fade-in
+      const isNewResponse = this.currentResponseId !== null && this.currentResponseId !== chunk.responseId;
+      
+      // Handle responseId changes for overlapping streams
+      if (this.currentResponseId !== null && 
+          this.currentResponseId !== chunk.responseId &&
+          chunk.sequenceNumber !== undefined &&
+          chunk.sequenceNumber > 2) {
+        console.log('🧹 [StreamingAudioPlayer] ResponseId CHANGED with gap - clearing old queue:', {
           previous: this.currentResponseId,
-          current: chunk.responseId
+          current: chunk.responseId,
+          sequenceGap: chunk.sequenceNumber
         });
         this.clearQueue();
       }
@@ -197,7 +388,7 @@ export class StreamingAudioPlayer {
       }
       this.currentResponseId = chunk.responseId;
 
-      // Ensure AudioContext is resumed
+      // Ensure AudioContext is resumed (critical for backgrounded tabs)
       await this.ensureAudioContextResumed();
 
       let samples: Float32Array;
@@ -240,7 +431,7 @@ export class StreamingAudioPlayer {
         let audioBuffer;
         try {
           audioBuffer = await this.audioContext.decodeAudioData(bytes.buffer.slice(0));
-        } catch (decodeError) {
+        } catch (decodeError: any) {
           // CRITICAL: Never swallow decode errors silently
           console.error('[StreamingAudioPlayer] decodeAudioData FAILED:', {
             chunkId: chunk.id,
@@ -270,21 +461,12 @@ export class StreamingAudioPlayer {
         }
       }
 
-      // HARD CAP: Check pending chunks and force clear if queue is growing too large
-      // If more than 10 pending chunks, the queue is backing up - clear it
-      if (this.pendingChunks.length > 10) {
-        console.warn('🧹 [StreamingAudioPlayer] QUEUE BACKUP DETECTED - clearing:', {
-          pendingChunks: this.pendingChunks.length,
-          incomingSamples: samples.length
-        });
-        this.clearQueue();
-      }
-
       // Send samples to worklet (create a copy to avoid transfer issues)
       const samplesCopy = new Float32Array(samples);
       this.workletNode.port.postMessage({
         type: 'ADD_SAMPLES',
-        data: samplesCopy
+        data: samplesCopy,
+        isNewResponse: isNewResponse
       });
       
       // Log when we add samples
@@ -292,12 +474,7 @@ export class StreamingAudioPlayer {
         console.log('[StreamingAudioPlayer] Added', samples.length, 'samples to worklet');
       }
 
-      // Trigger playback start callback on first chunk
-      if (!this.userGestureReceived) {
-        this.options.onPlaybackStart();
-      }
-
-    } catch (error) {
+    } catch (error: any) {
       this.options.onError(new Error(`Failed to process chunk ${chunk.id}: ${error}`));
     }
   }
@@ -310,6 +487,15 @@ export class StreamingAudioPlayer {
       this.workletNode.port.postMessage({ type: 'CLEAR_QUEUE' });
     }
     this.pendingChunks = [];
+    this.bufferedChunks = [];
+    this.reorderBuffer.clear();
+    this.hasStartedPlayback = false;
+    this.nextExpectedSequence = 0;
+    
+    if (this.reorderTimeout) {
+      clearTimeout(this.reorderTimeout);
+      this.reorderTimeout = null;
+    }
 
     if (this.options.debug) {
       console.log('[StreamingAudioPlayer] Queue cleared');
@@ -382,6 +568,21 @@ export class StreamingAudioPlayer {
 
     this.isDestroyed = true;
 
+    if (this.reorderTimeout) {
+      clearTimeout(this.reorderTimeout);
+      this.reorderTimeout = null;
+    }
+
+    if (this.bufferHealthInterval) {
+      clearInterval(this.bufferHealthInterval);
+      this.bufferHealthInterval = null;
+    }
+
+    if (this.visibilityChangeHandler) {
+      document.removeEventListener('visibilitychange', this.visibilityChangeHandler);
+      this.visibilityChangeHandler = null;
+    }
+
     if (this.workletNode) {
       this.workletNode.disconnect();
       this.workletNode = null;
@@ -398,8 +599,11 @@ export class StreamingAudioPlayer {
     }
 
     this.pendingChunks = [];
+    this.bufferedChunks = [];
+    this.reorderBuffer.clear();
     this.isInitialized = false;
     this.currentResponseId = null;
+    this.hasStartedPlayback = false;
 
     if (this.options.debug) {
       console.log('[StreamingAudioPlayer] Disposed');
