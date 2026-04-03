@@ -97,25 +97,43 @@ function buildInstructions(
         .join("\n")
     : "";
 
-  return `
-    You are a professional real-time interpreter.
-    Input language: ${myLanguage}
-    Output language: ${targetLanguage}
-    Register: ${registerGuides[register]}
+  const sourceLang = myLanguage === 'en' ? 'English' : 'French';
+  const targetLang = targetLanguage === 'en' ? 'English' : 'French';
 
-    ${historyBlock}
+  return `You are a professional real-time interpreter translating from ${sourceLang} to ${targetLang}.
 
-    RULES:
-    1. Translate ONLY. No commentary, no additions, no greetings.
-    2. Output the complete updated translation of the sentence so far.
-    3. Never translate proper nouns, phone numbers, URLs, or code.
-    4. Preserve tone, emotion, and urgency exactly.
-    5. If a word is unclear, use best contextual guess.
-       Never output "I didn't understand" or "[inaudible]".
-    6. Keep translations concise — do not pad or expand meaning.
-    7. For idiomatic expressions, use the equivalent idiom in
-       ${targetLanguage} — do not translate literally.
-  `;
+${historyBlock}
+
+CRITICAL TRANSLATION RULES:
+1. ONLY translate the input - never add commentary, greetings, or explanations
+2. Translate word-for-word preserving exact meaning and structure
+3. If input is a question, translate the question - do NOT answer it
+4. If input is a greeting to someone, translate that greeting exactly
+5. Preserve all proper nouns, names, numbers, dates, and technical terms
+6. Match the emotional tone and urgency exactly
+7. Keep sentence structure as close to source as possible
+8. Never invent, add, or remove content
+9. If unclear, make best contextual guess - never say "I didn't understand"
+10. For idioms, use equivalent idiom in ${targetLang} if one exists
+
+REGISTER: ${registerGuides[register]}
+
+EXAMPLES OF CORRECT TRANSLATION:
+Input (EN): "Good morning Sarah, thank you for joining us today"
+Output (FR): "Bonjour Sarah, merci de vous joindre à nous aujourd'hui"
+NOT: "Bonjour, je suis content que vous soyez là"
+
+Input (FR): "Comment allez-vous aujourd'hui?"
+Output (EN): "How are you today?"
+NOT: "I'm doing well, thank you"
+
+Input (EN): "The meeting starts at 3 PM"
+Output (FR): "La réunion commence à 15 heures"
+
+Input (FR): "J'ai besoin d'aide avec ce projet"
+Output (EN): "I need help with this project"
+
+Remember: You are a translator, not a conversation participant. Translate exactly what is said.`;
 }
 
 function formatTranscript(text: string): string {
@@ -442,7 +460,12 @@ export function useOpenAIRealtime({
               temperature: 0.0, // Maximum accuracy for transcription
               prompt: `This is a conversation in ${myLanguage === 'en' ? 'English' : 'French'}. Transcribe exactly what is said, including filler words, repetitions, and natural speech patterns.`
             },
-            turn_detection: null,   // ← MANUAL CONTROL — no server VAD
+            turn_detection: {
+              type: 'server_vad',
+              threshold: 0.5,        // Voice activity threshold (0.0-1.0)
+              prefix_padding_ms: 300, // Audio before speech starts
+              silence_duration_ms: 500 // Silence duration to end turn
+            },
             temperature: 0.1, // Lower temperature for more consistent translations
             max_response_output_tokens: 250 // Reasonable limit for translations
           }

@@ -12,12 +12,14 @@ import Chatroom from "./pages/Chatroom";
 import JoinRoom from "./pages/JoinRoom";
 import DocumentTranslationPage from "./pages/DocumentTranslation";
 import { WebSocketDebug } from "./components/WebSocketDebug";
+import { DeploymentWarning } from "./components/DeploymentWarning";
 
 const queryClient = new QueryClient();
 
 function AppRoutes() {
   return (
     <AppProvider>
+      <DeploymentWarning />
       <Routes>
         <Route path="/" element={<Index />} />
         <Route path="/login" element={<Navigate to="/" replace />} />
