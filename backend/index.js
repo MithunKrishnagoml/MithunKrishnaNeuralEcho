@@ -93,7 +93,9 @@ class TranslationSession {
       joinedAt: Date.now(),
       totalProcessingTime: 0,
       requestCount: 0,
-      pendingMessage: null // For tracking translation in progress
+      pendingMessage: null, // For tracking translation in progress
+      audioSequenceNumber: 0, // Track audio chunk sequence for ordering
+      currentResponseId: null // Track current OpenAI response ID
     });
     console.log(`Added participant ${userId} with language ${language} to session ${this.sessionId}`);
   }
@@ -1279,63 +1281,72 @@ async function handleOpenAIResponse(data, userId, translationSession) {
     }
 
     if (response.type === 'input_audio_buffer.speech_started') {
-      otherParticipant = translationSession.getOtherParticipant(userId);
-      if (otherParticipant?.socket && otherParticipant.socket.readyState === WebSocket.OPEN) {
-        otherParticipant.socket.send(JSON.stringify({
-          type: 'VOICE_ACTIVITY_STARTED',
-          sessionId: translationSession.sessionId,
-          participantId: userId,
-          timestamp: Date.now(),
-        }));
-      }
+      console.log(`🎤 [SPEECH_STARTED] User ${userId} started speaking`);
+      
+      // Send to ALL participants so everyone knows who's speaking
+      allParticipants = Array.from(translationSession.participants.values());
+      allParticipants.forEach(p => {
+        if (p.socket?.readyState === WebSocket.OPEN) {
+          p.socket.send(JSON.stringify({
+            type: 'VOICE_ACTIVITY_STARTED',
+            sessionId: translationSession.sessionId,
+            participantId: userId,
+            timestamp: Date.now(),
+          }));
+        }
+      });
     }
 
     if (response.type === 'input_audio_buffer.speech_stopped') {
-      otherParticipant = translationSession.getOtherParticipant(userId);
-      if (otherParticipant?.socket && otherParticipant.socket.readyState === WebSocket.OPEN) {
-        otherParticipant.socket.send(JSON.stringify({
-          type: 'VOICE_ACTIVITY_STOPPED',
-          sessionId: translationSession.sessionId,
-          participantId: userId,
-          timestamp: Date.now(),
-        }));
-      }
+      console.log(`🎤 [SPEECH_STOPPED] User ${userId} stopped speaking`);
+      
+      // Send to ALL participants so everyone knows who stopped speaking
+      allParticipants = Array.from(translationSession.participants.values());
+      allParticipants.forEach(p => {
+        if (p.socket?.readyState === WebSocket.OPEN) {
+          p.socket.send(JSON.stringify({
+            type: 'VOICE_ACTIVITY_STOPPED',
+            sessionId: translationSession.sessionId,
+            participantId: userId,
+            timestamp: Date.now(),
+          }));
+        }
+      });
     }
 
     // Handle translated audio streaming for room broadcast
     if (response.type === 'response.audio.delta') {
       const audioData = response.delta;
       
-      console.log(`=��� [AUDIO DELTA] Received audio chunk for user ${userId}, size: ${audioData?.length || 0}`);
+      console.log(`🎵 [AUDIO DELTA] Received audio chunk for user ${userId}, size: ${audioData?.length || 0}`);
+      
+      // Reset sequence number on new response
+      if (participant.currentResponseId !== response.response_id) {
+        console.log(`🔢 [AUDIO] New response detected, resetting sequence number`);
+        participant.audioSequenceNumber = 0;
+        participant.currentResponseId = response.response_id;
+      }
       
       // Broadcast translated audio to the other participant in the room
       otherParticipant = translationSession.getOtherParticipant(userId);
       if (otherParticipant?.socket && otherParticipant.socket.readyState === WebSocket.OPEN) {
-        const audioEvent = {
-          type: 'TRANSLATED_AUDIO',
-          sessionId: translationSession.sessionId,
-          fromParticipant: userId,
-          audioData: audioData,
-          timestamp: Date.now(),
-          quality: 'high',
-          processingTime: processingTime
-        };
-
         const chunkEvent = {
           type: 'AUDIO_CHUNK',
           sessionId: translationSession.sessionId,
           participantId: userId,
-          audioData,
+          pcmData: audioData, // Use pcmData to match frontend expectations
+          audioData, // Keep for backward compatibility
           responseId: response.response_id || `response_${Date.now()}`,
-          chunkId: `chunk_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+          sequenceNumber: participant.audioSequenceNumber++, // Add sequence number for ordering
+          chunkId: `chunk_${response.response_id}_${participant.audioSequenceNumber}`,
           timestamp: Date.now(),
         };
         
-        console.log(`=��� [ROOM AUDIO] Broadcasting translated audio to other participant (${audioData?.length || 0} bytes)`);
-        otherParticipant.socket.send(JSON.stringify(audioEvent));
+        console.log(`🎵 [ROOM AUDIO] Broadcasting audio chunk #${participant.audioSequenceNumber - 1} to other participant (${audioData?.length || 0} bytes)`);
+        // Only send AUDIO_CHUNK - TRANSLATED_AUDIO is deprecated to prevent dual-playback
         otherParticipant.socket.send(JSON.stringify(chunkEvent));
       } else {
-        console.warn(`G��n+� [ROOM AUDIO] Cannot broadcast - other participant socket not available`);
+        console.warn(`⚠️ [ROOM AUDIO] Cannot broadcast - other participant socket not available`);
       }
     }
     
@@ -1344,22 +1355,31 @@ async function handleOpenAIResponse(data, userId, translationSession) {
       console.log(`G�� [AUDIO DONE] Audio generation completed for user ${userId}`);
     }
 
-    // Handle real-time transcript streaming
+    // Handle real-time transcript streaming (original speech)
     if (response.type === 'conversation.item.input_audio_transcription.delta') {
-      otherParticipant = translationSession.getOtherParticipant(userId);
-      if (otherParticipant?.socket && otherParticipant.socket.readyState === WebSocket.OPEN) {
-        otherParticipant.socket.send(JSON.stringify({
-          type: 'PARTIAL_TRANSCRIPT',
-          sessionId: translationSession.sessionId,
-          participantId: userId,
-          delta: response.delta,
-          itemId: response.item_id || `item_${Date.now()}`,
-          timestamp: Date.now(),
-        }));
-      }
+      console.log(`📝 [PARTIAL_TRANSCRIPT] Delta from user ${userId}: "${response.delta}"`);
+      
+      // Send to BOTH participants - speaker sees their own words, listener sees original
+      allParticipants = Array.from(translationSession.participants.values());
+      allParticipants.forEach(p => {
+        if (p.socket?.readyState === WebSocket.OPEN) {
+          p.socket.send(JSON.stringify({
+            type: 'PARTIAL_TRANSCRIPT',
+            sessionId: translationSession.sessionId,
+            participantId: userId,
+            delta: response.delta,
+            itemId: response.item_id || `item_${Date.now()}`,
+            timestamp: Date.now(),
+            isOwnTranscript: p.socket === participant.socket
+          }));
+        }
+      });
     }
 
+    // Handle real-time translation streaming (translated speech)
     if (response.type === 'response.audio_transcript.delta') {
+      console.log(`🌐 [TRANSLATION_DELTA] Delta from user ${userId}: "${response.delta}"`);
+      
       otherParticipant = translationSession.getOtherParticipant(userId);
       if (otherParticipant?.socket && otherParticipant.socket.readyState === WebSocket.OPEN) {
         const transcriptDelta = {

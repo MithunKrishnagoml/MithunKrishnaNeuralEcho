@@ -114,7 +114,7 @@ export function useChatroomConnection({ roomId, participant, onEvent }: UseChatr
       }, 100);
     };
 
-    ws.onmessage = (event) => {
+    ws.onmessage = async (event) => {
       console.log('🌐🌐🌐 [WebSocket] onmessage fired! Raw data:', event.data);
       try {
         const data: ChatroomEvent = JSON.parse(event.data);
@@ -273,7 +273,9 @@ export function useChatroomConnection({ roomId, participant, onEvent }: UseChatr
             console.log('🎵 [AUDIO_CHUNK] Sequence number:', ('sequenceNumber' in data ? data.sequenceNumber : 'no-seq'));
             console.log('🎵 [AUDIO_CHUNK] Response ID:', data.responseId);
             console.log('🎵 [AUDIO_CHUNK] PCM data size:', ('pcmData' in data && data.pcmData ? data.pcmData.length : 0), 'bytes');
+            console.log('🎵 [AUDIO_CHUNK] audioData size:', ('audioData' in data && data.audioData ? data.audioData.length : 0), 'bytes');
             console.log('🎵 [AUDIO_CHUNK] Player ready:', !!translatedAudioPlayerRef.current);
+            console.log('🎵 [AUDIO_CHUNK] Player state:', translatedAudioPlayerRef.current?.isReady() ? 'ready' : 'not ready');
             console.log('🎵 ═══════════════════════════════════════════════════════');
             
             // Check participant ID filter
@@ -285,6 +287,7 @@ export function useChatroomConnection({ roomId, participant, onEvent }: UseChatr
             const pcmData = 'pcmData' in data ? data.pcmData : data.audioData;
             if (!pcmData) {
               console.error('❌ [AUDIO_CHUNK] FAILED - No pcmData in event');
+              console.error('❌ [AUDIO_CHUNK] Event data keys:', Object.keys(data));
               break;
             }
             
@@ -295,7 +298,7 @@ export function useChatroomConnection({ roomId, participant, onEvent }: UseChatr
             
             try {
               // Force user gesture handling when we receive audio
-              translatedAudioPlayerRef.current.handleUserGesture();
+              await translatedAudioPlayerRef.current.handleUserGesture();
               
               // Convert base64 PCM to audio chunk format
               const chunk = {
@@ -306,8 +309,14 @@ export function useChatroomConnection({ roomId, participant, onEvent }: UseChatr
                 responseId: data.responseId || 'unknown'
               };
               
-              translatedAudioPlayerRef.current.addChunk(chunk);
+              await translatedAudioPlayerRef.current.addChunk(chunk);
               console.log('✅ [AUDIO_CHUNK] Successfully added to streaming player:', chunk.id);
+              console.log('✅ [AUDIO_CHUNK] Chunk details:', {
+                id: chunk.id,
+                dataLength: chunk.data.length,
+                sequenceNumber: chunk.sequenceNumber,
+                responseId: chunk.responseId
+              });
             } catch (error) {
               console.error('❌ [AUDIO_CHUNK] FAILED to add chunk:', error);
             }
@@ -432,19 +441,33 @@ export function useChatroomConnection({ roomId, participant, onEvent }: UseChatr
             break;
 
           case 'PARTIAL_TRANSCRIPT':
-            console.log(' Received partial transcript chunk:', data.delta);
+            console.log('📝 [PARTIAL_TRANSCRIPT] Received partial transcript chunk:', data.delta);
+            console.log('📝 [PARTIAL_TRANSCRIPT] From participant:', data.participantId);
+            console.log('📝 [PARTIAL_TRANSCRIPT] Item ID:', data.itemId);
+            console.log('📝 [PARTIAL_TRANSCRIPT] Is own transcript:', 'isOwnTranscript' in data ? data.isOwnTranscript : 'not specified');
+            
+            // Notify parent component via onEvent callback
+            onEvent?.(data);
             break;
 
           case 'TRANSLATION_DELTA':
-            console.log(' Received translation delta:', data.delta);
+            console.log('🌐 [TRANSLATION_DELTA] Received translation delta:', data.delta);
+            console.log('🌐 [TRANSLATION_DELTA] From participant:', data.participantId);
+            console.log('🌐 [TRANSLATION_DELTA] Response ID:', data.responseId);
+            console.log('🌐 [TRANSLATION_DELTA] Target language:', data.targetLanguage);
+            
+            // Notify parent component via onEvent callback
+            onEvent?.(data);
             break;
 
           case 'VOICE_ACTIVITY_STARTED':
-            console.log(' Voice activity started for participant:', data.participantId);
+            console.log('🎤 [VOICE_ACTIVITY_STARTED] Participant started speaking:', data.participantId);
+            onEvent?.(data);
             break;
 
           case 'VOICE_ACTIVITY_STOPPED':
-            console.log(' Voice activity stopped for participant:', data.participantId);
+            console.log('🎤 [VOICE_ACTIVITY_STOPPED] Participant stopped speaking:', data.participantId);
+            onEvent?.(data);
             break;
             
           case 'USER_LEFT_ROOM':

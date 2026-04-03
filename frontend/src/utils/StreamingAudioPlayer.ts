@@ -207,15 +207,24 @@ export class StreamingAudioPlayer {
       return;
     }
 
+    console.log('🎵 [StreamingAudioPlayer] addChunk called:', {
+      chunkId: chunk.id,
+      dataLength: chunk.data?.length || 0,
+      sequenceNumber: chunk.sequenceNumber,
+      responseId: chunk.responseId,
+      isInitialized: this.isInitialized,
+      audioContextState: this.audioContext?.state
+    });
+
     // Always ensure AudioContext is resumed before queuing
     await this.ensureAudioContextResumed();
+    
+    console.log('🎵 [StreamingAudioPlayer] After resume, AudioContext state:', this.audioContext?.state);
 
     if (!this.isInitialized) {
       // Queue chunk until worklet is ready
       this.pendingChunks.push(chunk);
-      if (this.options.debug) {
-        console.log('[StreamingAudioPlayer] Chunk queued (worklet not ready):', chunk.id);
-      }
+      console.log('[StreamingAudioPlayer] Chunk queued (worklet not ready):', chunk.id, 'pending count:', this.pendingChunks.length);
       return;
     }
 
@@ -413,10 +422,16 @@ export class StreamingAudioPlayer {
 
       let samples: Float32Array;
 
-      // Check if this is PCM data (from real-time streaming) or WebM blob (fallback)
-      if (chunk.data.length < 1000 && chunk.sequenceNumber !== undefined) {
-        // This is likely PCM data from real-time streaming
-        console.log('[StreamingAudioPlayer] Processing PCM chunk:', chunk.id);
+      // Detect if this is PCM data (from real-time streaming) or WebM blob (fallback)
+      // PCM chunks from OpenAI are base64-encoded Int16 arrays, typically 1000-4000 bytes
+      // WebM blobs are much larger (10KB+) and don't have sequence numbers
+      const isPCM = chunk.sequenceNumber !== undefined;
+      
+      if (isPCM) {
+        // This is PCM data from real-time streaming
+        if (this.options.debug) {
+          console.log('[StreamingAudioPlayer] Processing PCM chunk:', chunk.id, 'size:', chunk.data.length);
+        }
         
         // Decode base64 to Int16 PCM
         const binaryString = atob(chunk.data);

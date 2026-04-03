@@ -110,23 +110,34 @@ export function ChatroomInterface({ roomId, participant, onLeaveRoom }: Chatroom
       }
 
       if (event.type === 'PARTIAL_TRANSCRIPT') {
-        if (!participant.id) {
-          console.warn('⚠️ [PARTIAL_TRANSCRIPT] participant.id is not set, allowing audio through');
-        } else if (event.participantId === participant.id) {
-          console.log('ℹ️ [PARTIAL_TRANSCRIPT] Filtering own transcript');
-          return;
-        }
+        console.log('📝 [ChatroomInterface] PARTIAL_TRANSCRIPT event:', {
+          participantId: event.participantId,
+          myId: participant.id,
+          delta: event.delta,
+          isOwnTranscript: event.isOwnTranscript
+        });
+        
+        // SPEAKER sees their own words appearing in real-time
+        // LISTENER sees the original words (before translation) appearing in real-time
+        // Both should see partial transcripts!
         addPartialTranscript(event.delta, event.itemId);
       }
 
       if (event.type === 'TRANSLATION_DELTA') {
-        if (!participant.id) {
-          console.warn('⚠️ [TRANSLATION_DELTA] participant.id is not set, allowing through');
-        } else if (event.participantId === participant.id) {
-          console.log('ℹ️ [TRANSLATION_DELTA] Filtering own translation');
-          return;
+        console.log('🌐 [ChatroomInterface] TRANSLATION_DELTA event:', {
+          participantId: event.participantId,
+          myId: participant.id,
+          delta: event.delta,
+          targetLanguage: event.targetLanguage
+        });
+        
+        // Only show translation deltas to the LISTENER (not the speaker)
+        // The listener sees the translated words appearing in real-time
+        if (event.participantId !== participant.id) {
+          addTranslationDelta(event.delta, event.responseId, event.targetLanguage);
+        } else {
+          console.log('ℹ️ [TRANSLATION_DELTA] Filtering own translation (speaker sees original, not translation)');
         }
-        addTranslationDelta(event.delta, event.responseId, event.targetLanguage);
       }
 
       if (event.type === 'AUDIO_CHUNK') {
@@ -141,23 +152,29 @@ export function ChatroomInterface({ roomId, participant, onLeaveRoom }: Chatroom
       }
 
       if (event.type === 'VOICE_ACTIVITY_STARTED') {
-        if (!participant.id) {
-          console.warn('⚠️ [VOICE_ACTIVITY_STARTED] participant.id is not set, allowing through');
-        } else if (event.participantId === participant.id) {
-          console.log('ℹ️ [VOICE_ACTIVITY_STARTED] Filtering own activity');
-          return;
+        console.log('🎤 [ChatroomInterface] VOICE_ACTIVITY_STARTED:', {
+          participantId: event.participantId,
+          myId: participant.id,
+          isOwnActivity: event.participantId === participant.id
+        });
+        
+        // Show voice activity for the OTHER participant (not yourself)
+        if (event.participantId !== participant.id) {
+          setVoiceActivity(true);
         }
-        setVoiceActivity(true);
       }
 
       if (event.type === 'VOICE_ACTIVITY_STOPPED') {
-        if (!participant.id) {
-          console.warn('⚠️ [VOICE_ACTIVITY_STOPPED] participant.id is not set, allowing through');
-        } else if (event.participantId === participant.id) {
-          console.log('ℹ️ [VOICE_ACTIVITY_STOPPED] Filtering own activity');
-          return;
+        console.log('🎤 [ChatroomInterface] VOICE_ACTIVITY_STOPPED:', {
+          participantId: event.participantId,
+          myId: participant.id,
+          isOwnActivity: event.participantId === participant.id
+        });
+        
+        // Clear voice activity for the OTHER participant (not yourself)
+        if (event.participantId !== participant.id) {
+          setVoiceActivity(false);
         }
-        setVoiceActivity(false);
       }
       
       if (event.type === 'TRANSLATED_MESSAGE') {
