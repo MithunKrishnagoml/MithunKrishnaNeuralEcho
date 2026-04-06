@@ -244,8 +244,9 @@ export class StreamingAudioPlayer {
     const seq = chunk.sequenceNumber!;
 
     // Detect sequence reset (new response starting)
-    if (this.currentResponseId !== chunk.responseId) {
-      console.log(`🔢 Sequence reset detected — restarting sequence tracking (new response: ${chunk.responseId})`);
+    // If we see seq=0 and we're way ahead (>5), treat as new stream
+    if (seq === 0 && this.nextExpectedSequence > 5) {
+      console.log(`🔢 New stream detected — resetting sequence (was at ${this.nextExpectedSequence})`);
       this.reorderBuffer.clear();
       this.nextExpectedSequence = 0;
       this.currentResponseId = chunk.responseId;
@@ -255,11 +256,12 @@ export class StreamingAudioPlayer {
       }
     }
 
-    // If chunk is way behind (>5 behind expected), it might be a reset we missed
-    if (seq === 0 && this.nextExpectedSequence > 5) {
-      console.log(`🔢 Sequence reset detected — restarting sequence tracking (seq=0 after ${this.nextExpectedSequence})`);
+    // Detect responseId change (new response starting)
+    if (this.currentResponseId !== chunk.responseId) {
+      console.log(`🔢 Response ID changed — resetting sequence (new response: ${chunk.responseId})`);
       this.reorderBuffer.clear();
       this.nextExpectedSequence = 0;
+      this.currentResponseId = chunk.responseId;
       if (this.reorderTimeout) {
         clearTimeout(this.reorderTimeout);
         this.reorderTimeout = null;
@@ -301,11 +303,11 @@ export class StreamingAudioPlayer {
         }, 40);
       }
     } else {
-      // Old chunk - only skip if it's more than 5 behind (prevents single reset from silencing session)
+      // Old chunk - only discard if more than 5 behind (prevents single reset from silencing session)
       const gap = this.nextExpectedSequence - seq;
       if (gap > 5) {
         if (this.options.debug) {
-          console.warn(`[StreamingAudioPlayer] Skipping old chunk #${seq} (expected #${this.nextExpectedSequence}, gap: ${gap})`);
+          console.warn(`[StreamingAudioPlayer] Discarding old chunk #${seq} (expected #${this.nextExpectedSequence}, gap: ${gap})`);
         }
       } else {
         // Close enough - accept it anyway to be resilient

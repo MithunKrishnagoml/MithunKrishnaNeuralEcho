@@ -262,47 +262,18 @@ export function useOpenAIRealtime({
       const pc = new RTCPeerConnection();
       pcRef.current = pc;
 
-      // Step C: Set up remote audio with capture for peer transmission
+      // Step C: Set up remote audio playback only (no capture/relay - using AUDIO_CHUNK streaming instead)
       pc.ontrack = (e) => {
-        console.log('🔊 [OpenAI] Audio track received');
-        
-        // Create audio context for capturing output
-        const outputCtx = new AudioContext({ sampleRate: 24000 });
-        audioOutputCtxRef.current = outputCtx;
+        console.log('🔊 [OpenAI] Audio track received - setting up local playback only');
         
         // Create audio element for local playback
         const audioEl = new Audio();
         audioEl.autoplay = true;
         audioEl.srcObject = e.streams[0];
         
-        // Also pipe to capture processor
-        const source = outputCtx.createMediaStreamSource(e.streams[0]);
-        const scriptProcessor = outputCtx.createScriptProcessor(4096, 1, 1);
-        
-        scriptProcessor.onaudioprocess = (event) => {
-          const inputData = event.inputBuffer.getChannelData(0);
-          
-          // Convert Float32 → PCM16 → base64
-          const int16 = new Int16Array(inputData.length);
-          for (let i = 0; i < inputData.length; i++) {
-            int16[i] = Math.max(-32768, Math.min(32767, inputData[i] * 32767));
-          }
-          
-          const base64 = btoa(
-            String.fromCharCode(...new Uint8Array(int16.buffer))
-          );
-          
-          // Send audio chunk to other participant via callback
-          onTranslatedAudioChunkRef.current?.({
-            audio: base64,
-            timestamp: Date.now()
-          });
-        };
-        
-        source.connect(scriptProcessor);
-        scriptProcessor.connect(outputCtx.destination);
-        
-        audioProcessorRef.current = scriptProcessor as any;
+        // Note: We do NOT capture/relay this audio stream
+        // Audio relay happens via response.audio.delta → AUDIO_CHUNK messages
+        // This eliminates dual-playback conflicts and reduces latency
       };
 
       // Step D: Capture mic with preprocessing
@@ -431,7 +402,8 @@ export function useOpenAIRealtime({
               // Send CLEAR_AUDIO to backend to flush other user's audio queue
               sendTranscriptToBackend({
                 type: 'CLEAR_AUDIO',
-                participantId: 'self'
+                participantId: 'self',
+                timestamp: Date.now()
               }, 'DELTA');
             }
             break;
@@ -499,16 +471,21 @@ export function useOpenAIRealtime({
           case 'response.audio.delta':
             // CRITICAL: Stream audio chunks immediately to other user with proper sequencing
             // This is the real-time translation audio arriving word-by-word
+            // Send IMMEDIATELY - no batching, no waiting for response.audio.done
             if (event.delta && onTranslatedAudioChunkRef.current) {
               const chunk = {
                 audio: event.delta, // base64 PCM16 audio chunk
                 timestamp: Date.now(),
-                sequenceNumber: sequenceNumberRef.current++,
+                sequenceNumber: sequenceNumberRef.current,
                 responseId: currentResponseIdRef.current || event.response_id || 'unknown'
               };
               
-              console.log(`🎵 [OpenAI] Sending audio chunk #${chunk.sequenceNumber} for response ${chunk.responseId}`);
+              // Increment AFTER creating chunk so sequence starts at 0
+              sequenceNumberRef.current++;
               
+              console.log(`🎵 [OpenAI] Sending audio chunk #${chunk.sequenceNumber} for response ${chunk.responseId} (size: ${event.delta.length} bytes)`);
+              
+              // Send immediately to backend for relay to other participant
               onTranslatedAudioChunkRef.current(chunk);
             }
             break;
@@ -609,6 +586,13 @@ export function useOpenAIRealtime({
           case 'response.cancelled':
             console.log('🛑 [OpenAI] Response cancelled');
             responseActiveRef.current = false;
+            
+            // Send CLEAR_AUDIO to backend when response is cancelled
+            sendTranscriptToBackend({
+              type: 'CLEAR_AUDIO',
+              participantId: 'self',
+              timestamp: Date.now()
+            }, 'DELTA');
             break;
 
           case 'error':

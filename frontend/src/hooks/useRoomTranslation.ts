@@ -58,7 +58,9 @@ export function useRoomTranslation({
   useEffect(() => {
     audioPlayerRef.current = new StreamingAudioPlayer({
       sampleRate: 24000,
-      maxQueueSize: 48000 * 10, // 10 seconds
+      maxQueueChunks: 150, // Maximum chunks in queue
+      minBufferChunks: 3, // Buffer 3 chunks before starting
+      minBufferMs: 80, // Or 80ms, whichever comes first
       debug: false,
       onError: (error) => {
         reportAudioError('Streaming audio player error', {
