@@ -1531,6 +1531,43 @@ function cleanupConnection(ws) {
   console.log(`Cleaned up connection for user ${userId} in session ${sessionId}`);
 }
 
+// Get OpenAI ephemeral token for frontend WebRTC connection
+app.get('/api/openai-token', async (req, res) => {
+  try {
+    if (!process.env.OPENAI_API_KEY) {
+      console.error('❌ [OpenAI Token] API key not configured');
+      return res.status(500).json({ error: 'OpenAI API key not configured' });
+    }
+
+    console.log('🔑 [OpenAI Token] Requesting ephemeral token from OpenAI');
+    
+    const response = await fetch('https://api.openai.com/v1/realtime/sessions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o-realtime-preview-2024-12-17',
+        voice: 'shimmer'
+      })
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('❌ [OpenAI Token] API error:', response.status, errorText);
+      throw new Error(`OpenAI API error: ${response.status}`);
+    }
+
+    const data = await response.json();
+    console.log('✅ [OpenAI Token] Ephemeral token generated successfully');
+    res.json({ client_secret: { value: data.client_secret.value } });
+  } catch (error) {
+    console.error('❌ [OpenAI Token] Error:', error);
+    res.status(500).json({ error: 'Failed to get OpenAI token', details: error.message });
+  }
+});
+
 // Home page
 app.get('/', (req, res) => {
   res.send(`
