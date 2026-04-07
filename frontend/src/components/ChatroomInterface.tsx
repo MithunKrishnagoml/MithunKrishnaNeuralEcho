@@ -141,6 +141,17 @@ export function ChatroomInterface({ roomId, participant, onLeaveRoom }: Chatroom
         }
       }
 
+      if (event.type === 'AUDIO_CHUNK') {
+        if (!participant.id) {
+          console.warn('⚠️ [AUDIO_CHUNK] participant.id is not set, allowing audio through');
+        } else if (event.participantId === participant.id) {
+          console.log('ℹ️ [AUDIO_CHUNK] Filtering own audio');
+          return;
+        }
+        addAudioChunk(event.audioData || event.pcmData, event.responseId);
+        playIncomingAudioChunk(event.audioData || event.pcmData, event.responseId);
+      }
+
       if (event.type === 'VOICE_ACTIVITY_STARTED') {
         console.log('🎤 [ChatroomInterface] VOICE_ACTIVITY_STARTED:', {
           participantId: event.participantId,
