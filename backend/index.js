@@ -880,6 +880,38 @@ wss.on('connection', (ws, req) => {
         }
       }
 
+      // Handle translated audio relay (from TTS track capture)
+      if (data.type === 'TRANSLATED_AUDIO') {
+        const { roomId, userId, audioData, sequenceNumber, responseId, timestamp } = data;
+        console.log(`🎵 [TRANSLATED_AUDIO] From ${userId}, seq: ${sequenceNumber}, size: ${audioData?.length || 0}`);
+        
+        const translationSession = translationSessions.get(roomId);
+        if (!translationSession) {
+          console.warn('⚠️ [TRANSLATED_AUDIO] Session not found:', roomId);
+          return;
+        }
+
+        // Find the peer — NOT the sender
+        const otherParticipant = translationSession.getOtherParticipant(userId);
+        if (!otherParticipant?.socket || otherParticipant.socket.readyState !== WebSocket.OPEN) {
+          console.warn('⚠️ [TRANSLATED_AUDIO] Peer socket not available');
+          return;
+        }
+
+        // Forward immediately — no processing, no buffering
+        const relayMessage = {
+          type: 'PEER_TRANSLATED_AUDIO',
+          speakerId: userId,
+          audioData: audioData,
+          sequenceNumber: sequenceNumber ?? 0,
+          responseId: responseId || 'unknown',
+          timestamp: timestamp || Date.now()
+        };
+        
+        otherParticipant.socket.send(JSON.stringify(relayMessage));
+        console.log(`🎵 [TRANSLATED_AUDIO] Relayed seq #${sequenceNumber} to peer`);
+      }
+
       // Handle audio stream end
       if (data.type === 'AUDIO_STREAM_END') {
         const { participantId, responseId } = data;

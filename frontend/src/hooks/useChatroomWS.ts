@@ -57,6 +57,10 @@ export function useChatroomWS({
   const reconnectCountRef = useRef<number>(0);
   const maxReconnectAttemptsRef = useRef<number>(10);
   
+  // Audio playback refs for gapless scheduling
+  const playbackCtxRef = useRef<AudioContext | null>(null);
+  const nextPlayTimeRef = useRef<number>(0);
+  
   // Use refs to avoid re-creating connect callback on every prop change
   const userNameRef = useRef(userName);
   const userLanguageRef = useRef(userLanguage);
@@ -116,10 +120,10 @@ export function useChatroomWS({
   const sendAudioChunk = useCallback((audio: string, timestamp: number, sequenceNumber?: number, responseId?: string) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({
-        type: 'AUDIO_CHUNK',
+        type: 'TRANSLATED_AUDIO',   // ← matches backend case
         roomId,
         userId,
-        audio,
+        audioData: audio,           // ← matches backend field name
         timestamp,
         sequenceNumber: sequenceNumber ?? 0,
         responseId: responseId || 'unknown'
@@ -136,6 +140,51 @@ export function useChatroomWS({
       }));
     }
   }, [roomId, userId]);
+
+  // Gapless audio playback function
+  const playIncomingAudio = useCallback((base64Chunk: string) => {
+    try {
+      // Lazy-create AudioContext
+      if (!playbackCtxRef.current) {
+        playbackCtxRef.current = new AudioContext({ sampleRate: 24000 });
+        nextPlayTimeRef.current = 0;
+      }
+      const ctx = playbackCtxRef.current;
+
+      // Decode base64 → PCM16 → Float32
+      const binary = atob(base64Chunk);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i);
+      }
+      const int16 = new Int16Array(bytes.buffer);
+      const float32 = new Float32Array(int16.length);
+      for (let i = 0; i < int16.length; i++) {
+        float32[i] = int16[i] / 32768;
+      }
+
+      // Create AudioBuffer and schedule gapless playback
+      const audioBuffer = ctx.createBuffer(1, float32.length, 24000);
+      audioBuffer.copyToChannel(float32, 0);
+
+      const source = ctx.createBufferSource();
+      source.buffer = audioBuffer;
+
+      const startAt = Math.max(
+        ctx.currentTime + 0.02,    // 20ms minimum scheduling lead time
+        nextPlayTimeRef.current
+      );
+
+      source.connect(ctx.destination);
+      source.start(startAt);
+
+      // Chain next chunk to start exactly when this one ends
+      nextPlayTimeRef.current = startAt + audioBuffer.duration;
+
+    } catch (err) {
+      console.error('[PLAYBACK] Error playing audio chunk:', err);
+    }
+  }, []);
 
   // Connection handler - moved into useEffect to avoid dependency array issues
   // This creates a stable function that doesn't cause the effect to re-run
@@ -276,12 +325,15 @@ export function useChatroomWS({
               );
               break;
 
-            case 'PEER_AUDIO_CHUNK':
-              // Pass audio chunk to parent component for playback
+            case 'PEER_TRANSLATED_AUDIO':
+              console.log('[WS] Received peer translated audio — playing');
+              // Play directly here — gapless scheduling
+              playIncomingAudio(data.audioData);
+              // Also call the callback if parent needs to know
               onPeerAudioChunk?.({
-                audio: data.audio,
+                audio: data.audioData,
                 timestamp: data.timestamp,
-                peerId: data.peerId
+                peerId: data.speakerId
               });
               break;
 
@@ -374,6 +426,7 @@ export function useChatroomWS({
     sendTranscript,
     sendMuteState,
     sendAudioChunk,
-    leaveRoom
+    leaveRoom,
+    playIncomingAudio   // ← ADD THIS
   };
 }

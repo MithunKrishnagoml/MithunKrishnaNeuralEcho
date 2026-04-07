@@ -262,18 +262,43 @@ export function useOpenAIRealtime({
       const pc = new RTCPeerConnection();
       pcRef.current = pc;
 
-      // Step C: Set up remote audio playback only (no capture/relay - using AUDIO_CHUNK streaming instead)
+      // Step C: Capture TTS track for relay, do NOT play locally
       pc.ontrack = (e) => {
-        console.log('🔊 [OpenAI] Audio track received - setting up local playback only');
-        
-        // Create audio element for local playback
-        const audioEl = new Audio();
-        audioEl.autoplay = true;
-        audioEl.srcObject = e.streams[0];
-        
-        // Note: We do NOT capture/relay this audio stream
-        // Audio relay happens via response.audio.delta → AUDIO_CHUNK messages
-        // This eliminates dual-playback conflicts and reduces latency
+        console.log('🔊 [OpenAI] TTS track received — capturing for relay, NOT playing locally');
+        const remoteStream = e.streams[0];
+
+        // Set up AudioContext to tap the incoming TTS
+        const captureCtx = new AudioContext({ sampleRate: 24000 });
+
+        captureCtx.audioWorklet.addModule('/audio-capture-processor.js').then(() => {
+          const source = captureCtx.createMediaStreamSource(remoteStream);
+          const captureNode = new AudioWorkletNode(captureCtx, 'audio-capture-processor');
+
+          captureNode.port.onmessage = (evt) => {
+            const { base64Chunk } = evt.data;
+            if (base64Chunk && onTranslatedAudioChunkRef.current) {
+              onTranslatedAudioChunkRef.current({
+                audio: base64Chunk,
+                timestamp: Date.now(),
+                sequenceNumber: sequenceNumberRef.current++,
+                responseId: currentResponseIdRef.current || 'unknown'
+              });
+            }
+          };
+
+          source.connect(captureNode);
+          // Connect to silent destination — AudioContext requires connection
+          const silentDest = captureCtx.createGain();
+          silentDest.gain.value = 0;
+          captureNode.connect(silentDest);
+          silentDest.connect(captureCtx.destination);
+
+          captureCtx.resume();
+
+          // Store ref for mute/unmute pause
+          (captureNode as any)._captureCtx = captureCtx;
+          audioProcessorRef.current = captureNode;
+        });
       };
 
       // Step D: Capture mic with preprocessing
@@ -468,28 +493,6 @@ export function useOpenAIRealtime({
             }
             break;
 
-          case 'response.audio.delta':
-            // CRITICAL: Stream audio chunks immediately to other user with proper sequencing
-            // This is the real-time translation audio arriving word-by-word
-            // Send IMMEDIATELY - no batching, no waiting for response.audio.done
-            if (event.delta && onTranslatedAudioChunkRef.current) {
-              const chunk = {
-                audio: event.delta, // base64 PCM16 audio chunk
-                timestamp: Date.now(),
-                sequenceNumber: sequenceNumberRef.current,
-                responseId: currentResponseIdRef.current || event.response_id || 'unknown'
-              };
-              
-              // Increment AFTER creating chunk so sequence starts at 0
-              sequenceNumberRef.current++;
-              
-              console.log(`🎵 [OpenAI] Sending audio chunk #${chunk.sequenceNumber} for response ${chunk.responseId} (size: ${event.delta.length} bytes)`);
-              
-              // Send immediately to backend for relay to other participant
-              onTranslatedAudioChunkRef.current(chunk);
-            }
-            break;
-
           case 'response.audio_transcript.delta':
             accumulatedTranscriptRef.current += event.delta;
             // Update current sentence translation
@@ -640,6 +643,11 @@ export function useOpenAIRealtime({
     if (dcRef.current?.readyState === "open") {
       dcRef.current.send(JSON.stringify({ type: "input_audio_buffer.clear" }));
     }
+    
+    // PAUSE capture so silence isn't relayed to peer
+    if (audioProcessorRef.current) {
+      (audioProcessorRef.current as any).port.postMessage({ paused: true });
+    }
   }, []);
 
   const unmute = useCallback(() => {
@@ -650,6 +658,11 @@ export function useOpenAIRealtime({
     isMutedRef.current = false;
     if (audioCtxRef.current) {
       audioCtxRef.current.resume();
+    }
+    
+    // RESUME capture
+    if (audioProcessorRef.current) {
+      (audioProcessorRef.current as any).port.postMessage({ paused: false });
     }
   }, []);
 

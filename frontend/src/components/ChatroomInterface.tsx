@@ -79,6 +79,7 @@ export function ChatroomInterface({ roomId, participant, onLeaveRoom }: Chatroom
     sendPartialTranscript,
     sendTranslationDelta,
     sendAudioChunk,
+    sendAudioStreamEnd,
     sendVoiceActivity,
     handleUserGesture: handleChatroomUserGesture
   } = useChatroomConnection({
@@ -138,17 +139,6 @@ export function ChatroomInterface({ roomId, participant, onLeaveRoom }: Chatroom
         } else {
           console.log('ℹ️ [TRANSLATION_DELTA] Filtering own translation (speaker sees original, not translation)');
         }
-      }
-
-      if (event.type === 'AUDIO_CHUNK') {
-        if (!participant.id) {
-          console.warn('⚠️ [AUDIO_CHUNK] participant.id is not set, allowing audio through');
-        } else if (event.participantId === participant.id) {
-          console.log('ℹ️ [AUDIO_CHUNK] Filtering own audio');
-          return;
-        }
-        addAudioChunk(event.audioData, event.responseId);
-        playIncomingAudioChunk(event.audioData, event.responseId);
       }
 
       if (event.type === 'VOICE_ACTIVITY_STARTED') {
@@ -229,15 +219,6 @@ export function ChatroomInterface({ roomId, participant, onLeaveRoom }: Chatroom
           console.log(' [BILINGUAL] Message from ME, already shown in currentTranscript');
         }
       }
-      
-      if (event.type === 'TRANSLATED_AUDIO') {
-        console.log(' [ChatroomInterface] Received translated audio from other participant');
-        console.log(' [ChatroomInterface] Audio data length:', event.audioData?.length);
-        console.log(' [ChatroomInterface] Original text:', event.originalText);
-        console.log(' [ChatroomInterface] Translated text:', event.translatedText);
-        // Audio playback is handled by useChatroomConnection
-        // Just log that we received it
-      }
 
       if (event.type === 'USER_LEFT_ROOM') {
         toast.info('Other participant left the room');
@@ -266,6 +247,7 @@ export function ChatroomInterface({ roomId, participant, onLeaveRoom }: Chatroom
     sendPartialTranscript,
     sendTranslationDelta,
     sendAudioChunk,
+    sendAudioStreamEnd,
     sendVoiceActivity,
     isConnected
   });
