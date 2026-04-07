@@ -130,8 +130,8 @@ export function useRoomTranslation({
       onTranslationDelta: (delta: string, responseId: string) => {
         sendTranslationDelta(delta, responseId, otherLanguage);
       },
-      onAudioChunk: (audioData: string, responseId: string) => {
-        sendAudioChunk(audioData, responseId);
+      onAudioChunk: (audioData: string, responseId: string, sequenceNumber?: number) => {
+        sendAudioChunk(audioData, responseId, sequenceNumber);
       },
     });
 

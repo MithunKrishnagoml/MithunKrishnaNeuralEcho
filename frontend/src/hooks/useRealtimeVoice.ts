@@ -63,7 +63,7 @@ export interface RealtimeStreamingCallbacks {
   onVoiceActivityStopped?: () => void;
   onPartialTranscript?: (delta: string, itemId: string) => void;
   onTranslationDelta?: (delta: string, responseId: string) => void;
-  onAudioChunk?: (audioData: string, responseId: string) => void;
+  onAudioChunk?: (audioData: string, responseId: string, sequenceNumber?: number) => void;
   onSilenceDetected?: () => void;
   onError?: (error: Error) => void;
 }
@@ -111,6 +111,7 @@ export function useRealtimeVoice() {
   const finalizedTurnRef = useRef<FinalizedTurnSnapshot | null>(null);
   const turnResponseDoneRef = useRef(false);
   const dbThresholdRef = useRef<number>(-50); // Default threshold: -50 dB
+  const audioSequenceRef = useRef<Map<string, number>>(new Map()); // Track sequence numbers per response
   
   // Refs for audio capture - store values that match the recorded audio
   const recordingTranscriptRef = useRef(""); // Original text for current recording
@@ -140,7 +141,7 @@ export function useRealtimeVoice() {
     onVoiceActivityStopped?: () => void;
     onPartialTranscript?: (delta: string, itemId: string) => void;
     onTranslationDelta?: (delta: string, responseId: string) => void;
-    onAudioChunk?: (audioData: string, responseId: string) => void;
+    onAudioChunk?: (audioData: string, responseId: string, sequenceNumber?: number) => void;
     onSilenceDetected?: () => void;
   } | null>(null);
 
@@ -281,9 +282,13 @@ export function useRealtimeVoice() {
       }
 
       if (event.type === "output_audio_buffer.started") {
+        // Reset sequence counter for this response
+        const responseId = event.response_id || `response_${Date.now()}`;
+        audioSequenceRef.current.set(responseId, 0);
+        console.log(`🔢 [AudioSequence] Reset sequence counter for response: ${responseId}`);
+        
         // Start real-time capture at first emitted output audio
         if (audioTapRef.current) {
-          const responseId = event.response_id || `response_${Date.now()}`;
           audioTapRef.current.startCapture(responseId);
           console.log('🎵 [RealtimeAudioTap] Started capture (output_audio_buffer.started)');
         }
@@ -320,7 +325,15 @@ export function useRealtimeVoice() {
       }
 
       if (event.type === "response.audio.delta") {
-        cbs.onAudioChunk?.(event.delta || "", event.response_id || "unknown_response");
+        // Track sequence number for this response
+        const responseId = event.response_id || "unknown_response";
+        if (!audioSequenceRef.current.has(responseId)) {
+          audioSequenceRef.current.set(responseId, 0);
+        }
+        const sequenceNumber = audioSequenceRef.current.get(responseId)!;
+        audioSequenceRef.current.set(responseId, sequenceNumber + 1);
+        
+        cbs.onAudioChunk?.(event.delta || "", responseId, sequenceNumber);
       }
 
       if (event.type === "response.done") {
@@ -368,6 +381,11 @@ export function useRealtimeVoice() {
       }
 
       if (event.type === "output_audio_buffer.stopped") {
+        // Clean up sequence counter for this response
+        const responseId = event.response_id || "unknown_response";
+        audioSequenceRef.current.delete(responseId);
+        console.log(`🧹 [AudioSequence] Cleaned up sequence counter for response: ${responseId}`);
+        
         // Stop real-time capture
         if (audioTapRef.current) {
           audioTapRef.current.stopCapture();

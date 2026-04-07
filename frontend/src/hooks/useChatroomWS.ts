@@ -117,14 +117,14 @@ export function useChatroomWS({
     }
   }, [roomId, userId]);
 
-  const sendAudioChunk = useCallback((audio: string, timestamp: number, sequenceNumber?: number, responseId?: string) => {
+  const sendAudioChunk = useCallback((audioData: string, responseId: string, sequenceNumber?: number) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({
         type: 'TRANSLATED_AUDIO',   // ← matches backend case
         roomId,
         userId,
-        audioData: audio,           // ← matches backend field name
-        timestamp,
+        audioData: audioData,       // ← matches backend field name
+        timestamp: Date.now(),
         sequenceNumber: sequenceNumber ?? 0,
         responseId: responseId || 'unknown'
       }));
